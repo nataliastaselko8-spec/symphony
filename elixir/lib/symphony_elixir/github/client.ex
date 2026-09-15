@@ -5,6 +5,7 @@ defmodule SymphonyElixir.GitHub.Client do
 
   require Logger
   alias SymphonyElixir.Config
+  alias SymphonyElixir.GitHub.Credentials
   alias SymphonyElixir.Tracker.Issue
 
   @default_api_url "https://api.github.com"
@@ -17,6 +18,18 @@ defmodule SymphonyElixir.GitHub.Client do
     with {:ok, _settings} <- settings(tracker_settings), do: :ok
   end
 
+  @spec bind_settings(map()) :: {:ok, map()} | {:error, term()}
+  def bind_settings(tracker_settings) do
+    if Map.has_key?(provider_settings(tracker_settings), "github_app") do
+      with {:ok, resolved} <- settings(tracker_settings) do
+        provider = tracker_settings |> provider_settings() |> Map.drop(["github_app", "token"]) |> Map.put("repo", resolved.repo)
+        {:ok, tracker_settings |> Map.put(:provider, provider) |> Map.put(:bound_github_settings, resolved)}
+      end
+    else
+      {:ok, tracker_settings}
+    end
+  end
+
   @spec secret_environment_names(map()) :: [String.t()]
   def secret_environment_names(tracker_settings) do
     provider = provider_settings(tracker_settings)
@@ -27,6 +40,7 @@ defmodule SymphonyElixir.GitHub.Client do
       "GITHUB_ENTERPRISE_TOKEN",
       "GH_ENTERPRISE_TOKEN" | env_reference_names([provider["token"]])
     ]
+    |> Kernel.++(Credentials.secret_environment_names(provider))
     |> Enum.uniq()
   end
 
@@ -48,7 +62,7 @@ defmodule SymphonyElixir.GitHub.Client do
     request_fun = Keyword.get(opts, :request_fun, &perform_request/5)
 
     with {:ok, github_settings} <- settings(tracker_settings) do
-      request_fun.(method, path, params, body, github_settings)
+      authenticated_request(method, path, params, body, github_settings, request_fun, opts)
     end
   end
 
@@ -244,7 +258,7 @@ defmodule SymphonyElixir.GitHub.Client do
   defp parse_datetime(_value), do: nil
 
   defp request_with_settings(method, path, params, body, settings, request_fun, allow_not_found) do
-    case request_fun.(method, path, params, body, settings) do
+    case authenticated_request(method, path, params, body, settings, request_fun, []) do
       {:ok, %{status: status, body: payload}} when status in 200..299 ->
         {:ok, payload}
 
@@ -263,6 +277,56 @@ defmodule SymphonyElixir.GitHub.Client do
     end
   end
 
+  defp authenticated_request(method, path, params, body, settings, request_fun, opts) do
+    with :ok <- authorize_path(settings, path),
+         {:ok, token} <- request_token(settings, opts) do
+      response = invoke_request(request_fun, method, path, params, body, Map.put(settings, :token, token))
+      invalidate_unauthorized(response, settings, token, opts)
+      sanitize_response(response, settings)
+    end
+  end
+
+  defp request_token(%{credential_reference: nil, token: token}, _opts), do: {:ok, token}
+  defp request_token(%{credential_reference: reference}, opts), do: Credentials.token(reference, opts)
+
+  defp invalidate_unauthorized({:ok, %{status: 401}}, %{credential_reference: reference}, token, opts)
+       when not is_nil(reference) do
+    Credentials.invalidate(reference, token, opts)
+  end
+
+  defp invalidate_unauthorized(_response, _settings, _token, _opts), do: :ok
+
+  defp invoke_request(request_fun, method, path, params, body, settings) do
+    request_fun.(method, path, params, body, settings)
+  rescue
+    _ -> {:error, :github_transport_error}
+  catch
+    _, _ -> {:error, :github_transport_error}
+  end
+
+  defp sanitize_response({:error, _reason}, %{credential_reference: reference}) when not is_nil(reference),
+    do: {:error, :github_transport_error}
+
+  defp sanitize_response(response, _settings), do: response
+
+  defp authorize_path(%{credential_reference: nil}, _path), do: :ok
+
+  defp authorize_path(settings, path) do
+    case String.split(path, "/") do
+      ["", "repos", owner, repo | segments] ->
+        if String.downcase(owner <> "/" <> repo) == String.downcase(settings.repo) and
+             Enum.all?(segments, &safe_path_segment?/1),
+           do: :ok,
+           else: {:error, :github_app_path_outside_scope}
+
+      _ ->
+        {:error, :github_app_path_outside_scope}
+    end
+  end
+
+  defp safe_path_segment?(segment),
+    do: segment not in ["", ".", ".."] and String.match?(segment, ~r/^[A-Za-z0-9_.~-]+$/)
+
   defp perform_request(method, path, params, body, settings) do
     with {:ok, request_method} <- request_method(method) do
       request_opts = [
@@ -274,6 +338,7 @@ defmodule SymphonyElixir.GitHub.Client do
       ]
 
       request_opts = if is_nil(body), do: request_opts, else: Keyword.put(request_opts, :json, body)
+      request_opts = if settings.credential_reference, do: Keyword.merge(request_opts, redirect: false, retry: false), else: request_opts
 
       case Req.request(request_opts) do
         {:ok, response} -> {:ok, %{status: response.status, body: response.body}}
@@ -282,18 +347,35 @@ defmodule SymphonyElixir.GitHub.Client do
     end
   end
 
+  defp settings(%{bound_github_settings: settings}), do: {:ok, settings}
+
   defp settings(tracker_settings) when is_map(tracker_settings) do
     provider = provider_settings(tracker_settings)
     api_url = provider["api_url"] || @default_api_url
     repo = resolve_setting(provider["repo"], System.get_env("GITHUB_REPO"))
-    token = resolve_setting(provider["token"], System.get_env("GITHUB_TOKEN"))
 
     cond do
       not valid_api_url?(api_url) -> {:error, :invalid_github_api_url}
       not present_string?(repo) -> {:error, :missing_github_repo}
       not valid_repo?(repo) -> {:error, :invalid_github_repo}
-      not present_string?(token) -> {:error, :missing_github_token}
-      true -> {:ok, %{api_url: String.trim_trailing(api_url, "/"), repo: repo, token: token}}
+      true -> resolve_credentials(provider, String.trim_trailing(api_url, "/"), repo)
+    end
+  end
+
+  defp resolve_credentials(%{"github_app" => _} = provider, api_url, repo) do
+    if api_url == @default_api_url do
+      with {:ok, reference} <- Credentials.reference(Map.put(provider, "repo", repo), :github) do
+        {:ok, %{api_url: api_url, repo: repo, token: nil, credential_reference: reference}}
+      end
+    else
+      {:error, :invalid_github_app_api_url}
+    end
+  end
+
+  defp resolve_credentials(provider, api_url, repo) do
+    case resolve_setting(provider["token"], System.get_env("GITHUB_TOKEN")) do
+      token when is_binary(token) -> {:ok, %{api_url: api_url, repo: repo, token: token, credential_reference: nil}}
+      _ -> {:error, :missing_github_token}
     end
   end
 

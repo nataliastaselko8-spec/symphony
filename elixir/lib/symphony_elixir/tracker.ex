@@ -26,10 +26,12 @@ defmodule SymphonyElixir.Tracker do
   @callback execute_agent_tool(String.t(), term(), keyword()) :: map()
   @callback secret_environment_names(map()) :: [String.t()]
   @callback validate_config(map()) :: :ok | {:error, term()}
+  @callback bind_settings(map()) :: {:ok, map()} | {:error, term()}
 
   @optional_callbacks agent_tool_specs: 0,
                       execute_agent_tool: 3,
-                      validate_config: 1
+                      validate_config: 1,
+                      bind_settings: 1
 
   @spec fetch_issues_by_states([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_states(states) do
@@ -48,12 +50,18 @@ defmodule SymphonyElixir.Tracker do
   """
   @spec bind_agent_tools() :: map()
   def bind_agent_tools do
-    tracker_settings = Config.settings!().tracker
+    bind_agent_tools(Config.settings!().tracker)
+  end
+
+  @doc false
+  @spec bind_agent_tools(map()) :: map()
+  def bind_agent_tools(tracker_settings) do
     adapter = adapter_for_settings!(tracker_settings)
+    bound_settings = adapter_bind_settings(adapter, tracker_settings)
 
     %{
       adapter: adapter,
-      tracker_settings: tracker_settings,
+      tracker_settings: bound_settings,
       tool_specs: adapter_agent_tool_specs(adapter),
       secret_environment_names: adapter_secret_environment_names(adapter, tracker_settings)
     }
@@ -102,6 +110,17 @@ defmodule SymphonyElixir.Tracker do
   defp adapter_for_settings!(%{kind: kind}) do
     {:ok, adapter} = adapter_for_kind(kind)
     adapter
+  end
+
+  defp adapter_bind_settings(adapter, settings) do
+    if Code.ensure_loaded?(adapter) and function_exported?(adapter, :bind_settings, 1) do
+      case adapter.bind_settings(settings) do
+        {:ok, bound} -> bound
+        {:error, _reason} -> raise ArgumentError, "Unable to bind tracker credentials"
+      end
+    else
+      settings
+    end
   end
 
   defp adapter_agent_tool_specs(adapter) do
