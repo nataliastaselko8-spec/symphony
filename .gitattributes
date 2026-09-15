@@ -1,0 +1,5 @@
+# Elixir tooling runs in Linux/WSL even when the checkout is on Windows.
+*.ex text eol=lf
+*.exs text eol=lf
+elixir/test/fixtures/status_dashboard_snapshots/* text eol=lf
+.github/pull_request_template.md text eol=lf

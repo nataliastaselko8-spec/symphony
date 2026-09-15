@@ -3,12 +3,16 @@ defmodule SymphonyElixir do
   Entry point for the Symphony orchestrator.
   """
 
+  alias SymphonyElixir.GitHubProjects.Inspection
+
   @doc """
   Start the agent runtime in the current BEAM node.
   """
   @spec start_link() :: Supervisor.on_start()
   def start_link do
-    SymphonyElixir.AgentRuntimeSupervisor.start_link([])
+    with :ok <- Inspection.validate_runtime_workflow() do
+      SymphonyElixir.AgentRuntimeSupervisor.start_link([])
+    end
   end
 end
 
@@ -18,6 +22,8 @@ defmodule SymphonyElixir.Application do
   """
 
   use Application
+
+  alias SymphonyElixir.GitHubProjects.Inspection
 
   @dialyzer {:nowarn_function, start_burrito_cli: 0}
 
@@ -33,6 +39,12 @@ defmodule SymphonyElixir.Application do
   @doc false
   @spec start_runtime() :: Supervisor.on_start()
   def start_runtime do
+    with :ok <- Inspection.validate_runtime_workflow() do
+      start_supervisor()
+    end
+  end
+
+  defp start_supervisor do
     :ok = SymphonyElixir.LogFile.configure()
 
     children = [

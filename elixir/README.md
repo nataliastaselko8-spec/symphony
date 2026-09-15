@@ -256,6 +256,14 @@ codex:
   credentials and provider authentication aliases from the Codex child, and leaves raw tool access
   limited by that token's GitHub permissions.
 
+### GitHub Projects inspection
+
+Use `tracker.kind: github_projects` with `--dry-run` for a finite JSON inspection of an
+organization Project. This adapter is inspection-only; normal runtime startup and switching a
+running workflow to this kind are rejected. Board eligibility is not permission to start an
+agent. See the [profile, example and read contract](docs/github_projects.md). No GitHub App is
+needed for synthetic tests; a pre-issued read-scoped installation token is required for live reads.
+
 ### Jira Cloud adapter
 
 - Config: use `tracker.kind: jira` with provider `base_url`, `email`, `api_token`, and required

@@ -1256,6 +1256,14 @@ containing:
 - mapping from public language-native error forms to portable transport/auth/rate-limit error
   categories and human-readable messages.
 
+An implementation MAY introduce an adapter in inspection-only mode before enabling runtime
+execution. Such a mode MUST perform a finite read and MUST NOT start the scheduler, workspace
+hooks, coding agents, cleanup or tracker mutations. A partial or failed read MUST exit nonzero.
+Inspection eligibility MUST be distinguished from runtime admission. Every normal startup path
+MUST reject the inspection-only kind, and workflow reload MUST retain the previous valid runtime
+configuration when a change to that kind is rejected. The Elixir implementation documents this
+staged extension for `github_projects` in `elixir/docs/github_projects.md`.
+
 ### 11.3 Normalization Rules
 
 Adapter output MUST satisfy Section 4.1.1. In addition:

@@ -3,13 +3,15 @@ defmodule SymphonyElixir.CLI do
   Escript entrypoint for running Symphony with an explicit WORKFLOW.md path.
   """
 
+  alias SymphonyElixir.GitHubProjects.Inspection
   alias SymphonyElixir.LogFile
 
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
-  @switches [{@acknowledgement_switch, :boolean}, logs_root: :string, port: :integer]
+  @switches [{@acknowledgement_switch, :boolean}, logs_root: :string, port: :integer, dry_run: :boolean]
 
   @type ensure_started_result :: {:ok, [atom()]} | {:error, term()}
   @type deps :: %{
+          optional(:inspect_workflow) => (Path.t() -> {:ok, map()} | {:error, term()}),
           file_regular?: (String.t() -> boolean()),
           set_workflow_file_path: (String.t() -> :ok | {:error, term()}),
           set_logs_root: (String.t() -> :ok | {:error, term()}),
@@ -23,11 +25,19 @@ defmodule SymphonyElixir.CLI do
   end
 
   @doc false
-  @spec main([String.t()], (-> ensure_started_result())) :: no_return()
-  def main(args, ensure_all_started) do
-    case evaluate(args, runtime_deps(ensure_all_started)) do
+  @spec main([String.t()], (-> ensure_started_result()) | deps()) :: no_return()
+  def main(args, ensure_all_started) when is_function(ensure_all_started, 0) do
+    main(args, runtime_deps(ensure_all_started))
+  end
+
+  def main(args, deps) when is_map(deps) do
+    case evaluate(args, deps) do
       :ok ->
         wait_for_shutdown()
+
+      {:inspection, report} ->
+        IO.puts(Jason.encode!(report))
+        System.halt(0)
 
       {:error, message} ->
         IO.puts(:stderr, message)
@@ -35,22 +45,14 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  @spec evaluate([String.t()], deps()) :: :ok | {:error, String.t()}
+  @spec evaluate([String.t()], deps()) :: :ok | {:inspection, map()} | {:error, String.t()}
   def evaluate(args, deps \\ runtime_deps()) do
     case OptionParser.parse(args, strict: @switches) do
       {opts, [], []} ->
-        with :ok <- require_guardrails_acknowledgement(opts),
-             :ok <- maybe_set_logs_root(opts, deps),
-             :ok <- maybe_set_server_port(opts, deps) do
-          run(Path.expand("WORKFLOW.md"), deps)
-        end
+        evaluate_workflow(Path.expand("WORKFLOW.md"), opts, deps)
 
       {opts, [workflow_path], []} ->
-        with :ok <- require_guardrails_acknowledgement(opts),
-             :ok <- maybe_set_logs_root(opts, deps),
-             :ok <- maybe_set_server_port(opts, deps) do
-          run(workflow_path, deps)
-        end
+        evaluate_workflow(workflow_path, opts, deps)
 
       _ ->
         {:error, usage_message()}
@@ -62,23 +64,34 @@ defmodule SymphonyElixir.CLI do
     expanded_path = Path.expand(workflow_path)
 
     if deps.file_regular?.(expanded_path) do
-      :ok = deps.set_workflow_file_path.(expanded_path)
+      with :ok <- Inspection.validate_runtime_workflow(expanded_path),
+           :ok <- deps.set_workflow_file_path.(expanded_path) do
+        start_workflow_runtime(expanded_path, deps)
+      else
+        {:error, :github_projects_execution_disabled} ->
+          {:error, "github_projects execution is disabled; use --dry-run for read-only inspection"}
 
-      case deps.ensure_all_started.() do
-        {:ok, _started_apps} ->
-          :ok
-
-        {:error, reason} ->
-          {:error, "Failed to start Symphony with workflow #{expanded_path}: #{inspect(reason)}"}
+        {:error, _reason} ->
+          {:error, "Failed to set workflow path"}
       end
     else
       {:error, "Workflow file not found: #{expanded_path}"}
     end
   end
 
+  defp start_workflow_runtime(expanded_path, deps) do
+    case deps.ensure_all_started.() do
+      {:ok, _started_apps} ->
+        :ok
+
+      {:error, reason} ->
+        {:error, "Failed to start Symphony with workflow #{expanded_path}: #{inspect(reason)}"}
+    end
+  end
+
   @spec usage_message() :: String.t()
   defp usage_message do
-    "Usage: symphony [--logs-root <path>] [--port <port>] [path-to-WORKFLOW.md]"
+    "Usage: symphony [--dry-run | --logs-root <path>] [--port <port>] [path-to-WORKFLOW.md]"
   end
 
   @spec runtime_deps() :: deps()
@@ -90,6 +103,34 @@ defmodule SymphonyElixir.CLI do
       set_server_port_override: &set_server_port_override/1,
       ensure_all_started: ensure_all_started
     }
+  end
+
+  defp evaluate_workflow(path, opts, deps) do
+    if Keyword.get(opts, :dry_run, false) do
+      inspect_workflow(path, opts, deps)
+    else
+      with :ok <- require_guardrails_acknowledgement(opts),
+           :ok <- maybe_set_logs_root(opts, deps),
+           :ok <- maybe_set_server_port(opts, deps) do
+        run(path, deps)
+      end
+    end
+  end
+
+  defp inspect_workflow(path, opts, deps) do
+    if Keyword.has_key?(opts, :logs_root) or Keyword.has_key?(opts, :port) do
+      {:error, "--dry-run cannot be combined with --logs-root or --port"}
+    else
+      inspect_workflow = Map.get(deps, :inspect_workflow, &Inspection.run/1)
+
+      case inspect_workflow.(Path.expand(path)) do
+        {:ok, report} ->
+          {:inspection, report}
+
+        {:error, reason} ->
+          {:error, "Project inspection failed: #{inspect(reason)}"}
+      end
+    end
   end
 
   defp maybe_set_logs_root(opts, deps) do
