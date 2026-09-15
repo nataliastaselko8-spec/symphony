@@ -1,0 +1,1840 @@
+<!doctype html>
+<html lang="en" data-visualize-standalone>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src 'unsafe-inline' blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Recovery Interface</title>
+<style>:root{color-scheme:light dark;background:light-dark(rgb(255 255 255), rgb(24 24 24))}html,body{margin:0}body{box-sizing:border-box;padding:1rem;background:inherit}iframe{display:block;width:100%;height:calc(100vh - 2rem);margin:0 auto;border:0}</style>
+</head>
+<body>
+<iframe sandbox="allow-scripts" referrerpolicy="no-referrer" title="Recovery Interface" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot; data-visualize-standalone&gt;
+&lt;head&gt;
+&lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot;&gt;
+&lt;meta name=&quot;referrer&quot; content=&quot;no-referrer&quot;&gt;
+&lt;meta http-equiv=&quot;Content-Security-Policy&quot; content=&quot;default-src &#x27;none&#x27;; script-src &#x27;unsafe-inline&#x27; &#x27;unsafe-eval&#x27; &#x27;wasm-unsafe-eval&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; style-src &#x27;unsafe-inline&#x27; blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; img-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; font-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; media-src blob: data: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://esm.sh https://fonts.bunny.net https://fonts.googleapis.com https://fonts.gstatic.com https://unpkg.com; worker-src blob:; connect-src blob: data:; frame-src &#x27;none&#x27;; object-src &#x27;none&#x27;; base-uri &#x27;none&#x27;; form-action &#x27;none&#x27;&quot;&gt;
+&lt;title&gt;Recovery Interface&lt;/title&gt;
+&lt;style&gt;:root {
+  color-scheme: light dark;
+  background-color: var(
+    --background,
+    var(--color-background-primary, light-dark(rgb(255 255 255), rgb(24 24 24)))
+  ) !important;
+
+  /* Agent-facing contract; keep in sync with SKILL.md. */
+  --background: var(
+    --color-background-primary,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --card: color-mix(in oklab, var(--foreground) 5%, var(--background));
+  --card-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --popover: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255), rgb(45 45 45))
+  );
+  --popover-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --primary: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --primary-foreground: var(
+    --color-text-inverse,
+    light-dark(rgb(255 255 255), rgb(13 13 13))
+  );
+  --secondary: var(
+    --color-background-secondary,
+    light-dark(rgb(255 255 255 / 96%), rgb(54 54 54 / 96%))
+  );
+  --secondary-foreground: var(
+    --color-text-primary,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --muted: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --muted-foreground: var(
+    --color-text-secondary,
+    light-dark(rgb(26 28 31 / 49.4%), rgb(255 255 255 / 49.8%))
+  );
+  --accent: var(
+    --color-background-info,
+    light-dark(rgb(229 242 255), rgb(13 39 63))
+  );
+  --accent-foreground: var(
+    --color-text-info,
+    light-dark(rgb(51 156 255), rgb(131 195 255))
+  );
+  --destructive: var(
+    --color-text-warning,
+    light-dark(rgb(226 85 7), rgb(255 133 73))
+  );
+  --border: var(
+    --color-border-secondary,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+  --input: var(
+    --color-border-primary,
+    light-dark(
+      rgb(26 28 31 / 11.8%),
+      color-mix(in oklab, rgb(0 0 0) 10%, transparent)
+    )
+  );
+  --ring: var(
+    --color-ring-primary,
+    light-dark(rgb(51 156 255), rgb(131 195 255 / 76%))
+  );
+  --font-size-base: var(--font-text-md-size, 14px);
+  --blue: light-dark(rgb(51 156 255), rgb(51 156 255));
+  --orange: light-dark(rgb(226 85 7), rgb(251 106 34));
+  --green: light-dark(rgb(0 162 64), rgb(64 201 119));
+  --red: light-dark(rgb(224 46 42), rgb(255 103 100));
+  --purple: light-dark(rgb(146 79 247), rgb(173 123 249));
+  --yellow: light-dark(rgb(255 195 0), rgb(255 210 64));
+  --viz-series-1: var(--primary);
+  --viz-series-2: light-dark(rgb(243 136 59), rgb(245 154 86));
+  --viz-series-3: light-dark(rgb(93 201 119), rgb(116 213 139));
+  --viz-series-4: light-dark(rgb(235 119 177), rgb(240 143 192));
+  --viz-series-5: light-dark(rgb(155 121 236), rgb(170 145 239));
+  --viz-series-6: light-dark(rgb(58 185 177), rgb(90 203 194));
+
+  /* Internal implementation variables; not part of the agent contract. */
+  --font-sans: -apple-system, system-ui, &quot;Segoe UI&quot;, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, &quot;SF Mono&quot;, Menlo, Consolas, &quot;Liberation Mono&quot;,
+    monospace;
+  --font-size-normal: max(11px, var(--font-size-base));
+  --font-size-tooltip: calc(var(--font-size-base) - 1px);
+  --font-size-small: max(11px, calc(var(--font-size-base) - 2px));
+  --font-size-h1: calc(var(--font-size-normal) * 1.7142857143);
+  --font-size-h2: calc(var(--font-size-normal) * 1.4285714286);
+  --font-size-h3: calc(var(--font-size-normal) * 1.2857142857);
+  --font-weight-normal: 430;
+  --font-weight-medium: 500;
+  --icon-size: 16px;
+  --line-height-normal: calc(var(--font-size-normal) * 1.5);
+  --line-height-tooltip: calc(var(--font-size-tooltip) * 1.4285714286);
+  --line-height-small: calc(var(--font-size-small) + 4px);
+  --corner-shape: round;
+  --radius: var(--border-radius-lg, 10px);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-2xl: calc(var(--radius) * 1.6);
+  --radius-full: 9999px;
+  --shadow-sm: 0 1px 2px -1px rgb(0 0 0 / 8%);
+  --checkmark-image: url(&quot;data:image/svg+xml,%3Csvg xmlns=&#x27;http://www.w3.org/2000/svg&#x27; viewBox=&#x27;0 0 17 17&#x27;%3E%3Cpath d=&#x27;M12.8961 3.64101C13.1297 3.41418 13.4984 3.37523 13.7779 3.56581C14.0571 3.75635 14.1554 4.11331 14.0299 4.41347L13.9615 4.53847L7.71151 13.7045C7.59411 13.8767 7.4063 13.9877 7.19881 14.0072C6.99136 14.0267 6.78564 13.9533 6.63826 13.806L2.88826 10.056L2.79842 9.9457C2.6192 9.67407 2.64927 9.30496 2.88826 9.06581C3.12738 8.82669 3.49647 8.79676 3.76815 8.97597L3.8785 9.06581L7.03084 12.2182L12.8053 3.74941L12.8961 3.64101Z&#x27;/%3E%3C/svg%3E&quot;);
+
+  /* Legacy aliases; not part of the current agent contract. */
+  --viz-bg: transparent;
+  --viz-panel: var(--card);
+  --viz-border: var(--border);
+  --viz-text: var(--foreground);
+  --viz-muted: var(--muted-foreground);
+  --viz-accent: var(--primary);
+  --viz-accent-text: var(--primary-foreground);
+  --viz-accent-bg: var(--accent);
+  --viz-font-size: var(--font-size-base);
+  --viz-warning: var(--destructive);
+}
+
+:root[data-theme=&quot;light&quot;] {
+  color-scheme: light;
+}
+
+:root[data-theme=&quot;dark&quot;] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html &gt; body {
+  /* Preserve MCP aliases for older inline renderers without creating :root cycles. */
+  --color-background-primary: var(
+    --background,
+    light-dark(rgb(255 255 255), rgb(24 24 24))
+  );
+  --color-text-primary: var(
+    --foreground,
+    light-dark(rgb(26 28 31), rgb(255 255 255))
+  );
+  --color-border-secondary: var(
+    --border,
+    light-dark(rgb(26 28 31 / 8%), rgb(255 255 255 / 8.2%))
+  );
+
+  margin: 0;
+  padding: var(--visualize-paint-gutter, 0px);
+  color: var(--foreground);
+  background: transparent !important;
+  font-family: var(--font-sans) !important;
+  font-size: var(--font-size-normal);
+  font-weight: var(--font-weight-normal);
+  line-height: var(--line-height-normal);
+}
+
+a {
+  color: color-mix(in srgb, var(--viz-accent) 80%, var(--viz-text) 20%);
+  cursor: pointer;
+  font-weight: var(--font-weight-medium, 500);
+  text-decoration: none;
+  text-underline-offset: 2px;
+}
+
+a:is(:hover, :focus-visible) {
+  text-decoration-line: underline;
+  text-decoration-style: dashed;
+  text-decoration-thickness: 0.5px;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p {
+  margin-block: 0;
+}
+
+h1 {
+  font-size: var(--font-size-h1);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h2 {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+h3,
+h4,
+h5,
+h6 {
+  font-size: var(--font-size-h3);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.3;
+}
+
+b,
+strong,
+th {
+  font-weight: var(--font-weight-medium);
+}
+
+code:not(pre code) {
+  display: inline;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  word-break: break-word;
+}
+
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--foreground);
+  font: inherit;
+  text-align: start;
+}
+
+.table :is(th, td) {
+  padding-block: 10px;
+  padding-inline: 0 24px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--border);
+  text-align: start;
+  vertical-align: top;
+}
+
+.table-responsive &gt; .table :is(th, td) {
+  overflow-wrap: break-word;
+}
+
+.table :is(th, td):last-child {
+  padding-inline-end: 0;
+}
+
+.table :is(caption, thead th) {
+  font-weight: 600;
+}
+
+.table thead th {
+  padding-block: 8px;
+  border-bottom-color: color-mix(in srgb, var(--foreground) 16%, transparent);
+}
+
+.table tbody tr:last-child :is(th, td) {
+  border-bottom: 0;
+}
+
+.table.table-sm :is(th, td) {
+  padding-block: 6px;
+}
+
+.table.table-sm :is(th, td):not(:last-child) {
+  padding-inline-end: 16px;
+}
+
+.table :is(.text-end, [align=&quot;right&quot;]) {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.table :is(.text-center, [align=&quot;center&quot;]) {
+  text-align: center;
+}
+
+.table .text-nowrap {
+  white-space: nowrap;
+}
+
+#widget {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  padding: 0;
+  background: transparent !important;
+}
+
+.card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  overflow-wrap: break-word;
+  border-radius: var(--radius-2xl);
+  corner-shape: var(--corner-shape);
+  color: var(--card-foreground);
+  background: var(--card);
+}
+
+#widget &gt; :not(.card, .progress) {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tooltip {
+  position: fixed;
+  z-index: 50;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: min(
+    20rem,
+    var(--tooltip-available-width, calc(100vw - 10px)),
+    calc(100vw - 10px)
+  );
+  max-height: min(
+    var(--tooltip-available-height, calc(100vh - 10px)),
+    calc(100vh - 10px)
+  );
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: none;
+  font-size: var(--font-size-tooltip);
+  line-height: var(--line-height-tooltip);
+  overflow-wrap: break-word;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.viz-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(max(180px, 24%), 1fr));
+  gap: 10px;
+}
+
+.viz-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.viz-stat-value {
+  font-size: var(--font-size-h2);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+}
+
+.viz-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+hr {
+  width: 100%;
+  height: 1px;
+  margin-block: 6px;
+  border: 0;
+  background: var(--border);
+}
+
+.nav {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+}
+
+.progress {
+  display: flex;
+  height: 8px;
+  margin-block: calc((var(--line-height-normal, 1.5em) - 8px) / 2);
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+}
+
+.progress-bar:only-child {
+  border-radius: var(--radius-full);
+}
+
+.progress-bar {
+  height: 100%;
+  flex-shrink: 0;
+  border: 0;
+  background: var(--viz-series-1);
+}
+
+.viz-badge {
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  color: var(--accent-foreground);
+  background: var(--accent);
+  font-weight: var(--font-weight-medium);
+}
+
+small,
+.text-small,
+.viz-badge {
+  font-size: var(--font-size-small);
+  line-height: var(--line-height-small);
+}
+
+.text-muted {
+  color: var(--muted-foreground);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.viz-controls &gt; .form-label {
+  display: grid;
+  min-width: min(100%, 260px);
+  flex: 1 1 280px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin-bottom: 0;
+}
+
+.viz-controls &gt; .form-label &gt; :is(.form-control, .form-range, .form-select) {
+  grid-column: 1 / -1;
+}
+
+.btn,
+.nav-link,
+.form-check-input,
+.form-control,
+.form-range,
+.form-select {
+  font: inherit;
+}
+
+.btn,
+.nav-link {
+  appearance: button;
+  display: inline-flex;
+  inline-size: fit-content;
+  max-inline-size: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0 8px;
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: var(--cursor-interaction, pointer);
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.btn:is(.btn-block, .viz-tile) {
+  inline-size: 100%;
+}
+
+.btn.viz-tile {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+a.btn {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn:not(:disabled):hover,
+.nav-link:not(:disabled):not([aria-disabled=&quot;true&quot;]):hover {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--primary-foreground);
+  background: var(--foreground);
+  background-clip: padding-box;
+}
+
+.btn-primary .text-muted {
+  color: color-mix(in srgb, var(--primary-foreground) 50%, transparent);
+}
+
+.btn-primary:not(:disabled):hover {
+  background: color-mix(in srgb, var(--foreground) 80%, transparent);
+  background-clip: padding-box;
+}
+
+.btn-ghost {
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.btn-ghost:not(:disabled):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.nav-pills .nav-link {
+  min-width: 0;
+  border-color: transparent;
+  color: var(--muted-foreground);
+  background: transparent;
+}
+
+.nav-justified .nav-link {
+  flex: 1 1 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.nav-pills .nav-link.active {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+.btn:disabled,
+.nav-link:disabled,
+.nav-link[aria-disabled=&quot;true&quot;] {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+[data-lucide] {
+  stroke-width: 1.6;
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--foreground);
+}
+
+.form-control {
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  padding: 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background: var(--secondary);
+}
+
+.form-control::placeholder {
+  color: var(--muted-foreground);
+}
+
+.form-control[type=&quot;file&quot;] {
+  padding: 0;
+  overflow: hidden;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control[type=&quot;file&quot;]::file-selector-button {
+  min-height: 26px;
+  margin-right: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid var(--input);
+  color: var(--secondary-foreground);
+  background: var(--secondary);
+  cursor: inherit;
+  font: inherit;
+}
+
+.form-control[type=&quot;file&quot;]:not(:disabled):hover::file-selector-button {
+  background: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-control-color[type=&quot;color&quot;] {
+  width: 40px;
+  height: 28px;
+  padding: 3px;
+  cursor: var(--cursor-interaction, pointer);
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.form-control-color[type=&quot;color&quot;]::-webkit-color-swatch {
+  border: 0;
+  border-radius: calc(var(--radius-lg) - 4px);
+  corner-shape: var(--corner-shape);
+}
+
+textarea.form-control {
+  height: auto;
+  min-height: 72px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.form-control:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-control:disabled,
+.form-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.form-select {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-height: 28px;
+  margin: 0;
+  padding: 0 32px 0 8px;
+  outline: none;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-lg);
+  corner-shape: var(--corner-shape);
+  color: var(--foreground);
+  background-color: var(--secondary);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted-foreground) 50%),
+    linear-gradient(135deg, var(--muted-foreground) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 50%,
+    calc(100% - 10px) 50%;
+  background-repeat: no-repeat;
+  background-size: 4px 4px;
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-select:not(:disabled):hover {
+  background-color: color-mix(in srgb, var(--foreground) 6%, var(--secondary));
+}
+
+.form-select:focus-visible {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-check {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+}
+
+.form-check-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  border: 1px solid var(--input);
+  color: var(--primary-foreground);
+  background-color: transparent;
+  cursor: var(--cursor-interaction, default);
+  transition:
+    background-color 150ms,
+    border-color 150ms,
+    box-shadow 150ms;
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;] {
+  border-color: var(--input);
+  border-radius: var(--radius-sm);
+  corner-shape: var(--corner-shape);
+  background-color: var(--secondary);
+  box-shadow: var(--shadow-sm);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input:not(:disabled):not(:checked):hover {
+  background-color: var(--card);
+}
+
+.form-check:not(.form-switch) .form-check-input[type=&quot;checkbox&quot;]:checked {
+  border-color: var(--primary);
+  background-color: var(--primary);
+}
+
+.form-check:not(.form-switch)
+  .form-check-input[type=&quot;checkbox&quot;]:checked::before {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: var(--primary-foreground);
+  content: &quot;&quot;;
+  mask: var(--checkmark-image) center / 12px 12px no-repeat;
+}
+
+.form-check-input[type=&quot;radio&quot;] {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+}
+
+.form-check-input[type=&quot;radio&quot;]:checked {
+  border: 2px solid var(--primary);
+  background:
+    radial-gradient(circle, var(--primary-foreground) 0 2.5px, transparent 3px),
+    var(--primary);
+}
+
+.form-check:not(.form-switch) .form-check-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled {
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.form-check:not(.form-switch) .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+}
+
+.form-switch .form-check-input:disabled,
+.form-switch .form-check-input:disabled + .form-check-label {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.form-check-label {
+  color: var(--foreground);
+  cursor: var(--cursor-interaction, default);
+}
+
+.form-switch .form-check-input {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--muted);
+  box-shadow: none;
+  transition: background-color 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input::before {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  border: 1px solid light-dark(var(--primary-foreground), var(--foreground));
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+  box-shadow: var(--shadow-sm);
+  content: &quot;&quot;;
+  transform: translate(2px, -50%);
+  transition: transform 200ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.form-switch .form-check-input:checked {
+  background: var(--primary);
+}
+
+.form-switch .form-check-input:checked::before {
+  transform: translate(14px, -50%);
+}
+
+.form-switch .form-check-input:focus-visible {
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.form-range {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 28px;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  outline: none;
+  border: 0;
+  accent-color: var(--primary);
+  background: linear-gradient(
+      color-mix(in srgb, var(--foreground) 7%, transparent),
+      color-mix(in srgb, var(--foreground) 7%, transparent)
+    )
+    center / 100% 2px no-repeat;
+}
+
+.form-range::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-webkit-slider-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range::-moz-range-track {
+  height: 28px;
+  background: transparent;
+}
+
+.form-range::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: light-dark(var(--primary-foreground), var(--foreground));
+}
+
+.form-range:focus-visible::-moz-range-thumb {
+  border-color: var(--ring);
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+.form-range:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.btn:not(.btn-primary, .viz-tile):is(
+  [aria-pressed=&quot;true&quot;],
+  [aria-selected=&quot;true&quot;],
+  .is-selected
+) {
+  border-color: var(--primary);
+  color: var(--primary-foreground);
+  background: var(--primary);
+}
+
+.btn.viz-tile:is([aria-pressed=&quot;true&quot;], [aria-selected=&quot;true&quot;], .is-selected) {
+  border-color: var(--primary);
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+
+.btn:focus-visible,
+.nav-link:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .btn,
+  .nav-link,
+  .form-control,
+  .form-select {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* Keep small-screen WebKit from zooming when a text field receives focus. */
+  .form-control,
+  .form-select {
+    font-size: max(16px, var(--font-size-normal));
+  }
+
+  .form-control[type=&quot;file&quot;]::file-selector-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .form-control-color[type=&quot;color&quot;] {
+    width: 44px;
+    height: 44px;
+  }
+
+  .form-control:is(
+    [type=&quot;date&quot;],
+    [type=&quot;datetime-local&quot;],
+    [type=&quot;month&quot;],
+    [type=&quot;time&quot;],
+    [type=&quot;week&quot;]
+  ) {
+    min-width: 0;
+    max-width: 100%;
+    padding-block: 8px;
+  }
+
+  .form-check {
+    min-height: 44px;
+    padding-inline: 15px;
+  }
+
+  .form-check-input {
+    position: relative;
+  }
+
+  .form-check-input::after {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    content: &quot;&quot;;
+    transform: translate(-50%, -50%);
+  }
+
+  .form-check-label {
+    display: inline-flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .form-range {
+    height: 44px;
+    touch-action: pan-y;
+  }
+
+  .form-range::-webkit-slider-runnable-track {
+    height: 44px;
+  }
+
+  .form-range::-moz-range-track {
+    height: 44px;
+  }
+
+  .form-range::-webkit-slider-thumb {
+    margin-top: 12px;
+  }
+}
+
+svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+#widget &gt; svg {
+  width: 100%;
+}
+
+/* Model-authored chart rules can otherwise stretch icons after these styles load. */
+svg.lucide {
+  display: block;
+  width: var(--icon-size) !important;
+  height: var(--icon-size) !important;
+  flex: none;
+  margin: 0 !important;
+  stroke-width: 1.6;
+}
+
+.text-warning,
+.text-destructive {
+  color: var(--destructive);
+}
+
+html&gt;body{padding:0}&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;div id=&quot;es-recovery-console&quot; lang=&quot;ru&quot; aria-label=&quot;Панель восстановления EmotionStat&quot;&gt;
+  &lt;style&gt;
+    #es-recovery-console {
+      --er-surface: light-dark(#ffffff, #151b23);
+      --er-subtle: light-dark(#f6f8fa, #1b222c);
+      --er-text: light-dark(#1f2328, #edf1f5);
+      --er-muted: light-dark(#59636e, #a9b5c3);
+      --er-line: light-dark(#d1d9e0, #394451);
+      --er-blue: light-dark(#0969da, #79b8ff);
+      --er-red: light-dark(#b4232c, #ff9ba1);
+      --er-red-bg: light-dark(#fff0f1, #371e26);
+      --er-amber: light-dark(#805800, #edc576);
+      --er-amber-bg: light-dark(#fff8df, #30291a);
+      --er-green: light-dark(#176d38, #7ee2a8);
+      --er-green-bg: light-dark(#edf9f0, #192f24);
+      --er-primary: light-dark(#1f733b, #2f8c4f);
+      --er-on-primary: light-dark(#ffffff, #ffffff);
+      color-scheme: light dark;
+      color: var(--er-text);
+      font: 400 14px/1.5 -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif;
+      width: 100%;
+    }
+    #es-recovery-console * { box-sizing: border-box; }
+    #es-recovery-console [hidden] { display: none !important; }
+    #es-recovery-console .er-window { background: var(--er-surface); border: 1px solid var(--er-line); border-radius: 12px; overflow: clip; }
+    #es-recovery-console .er-chrome { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; padding: 13px 20px; border-bottom: 1px solid var(--er-line); background: var(--er-subtle); }
+    #es-recovery-console .er-brand { font-weight: 500; display: flex; align-items: center; gap: 8px; }
+    #es-recovery-console .er-example { color: var(--er-muted); font-size: 12px; }
+    #es-recovery-console .er-content { padding: 22px; }
+    #es-recovery-console .er-heading { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    #es-recovery-console .er-repo { font-weight: 500; }
+    #es-recovery-console h2 { margin: 3px 0 0; font: 500 21px/1.35 -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; color: var(--er-text); }
+    #es-recovery-console h3 { margin: 0; font: 500 16px/1.4 -apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, sans-serif; color: var(--er-text); }
+    #es-recovery-console .er-pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 20px; padding: 4px 10px; font-size: 12px; font-weight: 500; color: var(--er-red); background: var(--er-red-bg); }
+    #es-recovery-console .er-pill[data-tone=&quot;good&quot;] { color: var(--er-green); background: var(--er-green-bg); }
+    #es-recovery-console .er-pill[data-tone=&quot;wait&quot;] { color: var(--er-amber); background: var(--er-amber-bg); }
+    #es-recovery-console .er-path { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 21px 0; border: 1px solid var(--er-line); border-radius: 7px; }
+    #es-recovery-console .er-stage { padding: 11px 12px; border-right: 1px solid var(--er-line); min-width: 0; }
+    #es-recovery-console .er-stage:last-child { border-right: 0; }
+    #es-recovery-console .er-stage-title { font-size: 12px; color: var(--er-muted); }
+    #es-recovery-console .er-stage-value { display: block; margin-top: 3px; font-weight: 500; }
+    #es-recovery-console .er-stage[data-tone=&quot;good&quot;] .er-stage-value { color: var(--er-green); }
+    #es-recovery-console .er-stage[data-tone=&quot;bad&quot;] .er-stage-value { color: var(--er-red); }
+    #es-recovery-console .er-stage[data-tone=&quot;wait&quot;] .er-stage-value { color: var(--er-amber); }
+    #es-recovery-console .er-context { display: grid; grid-template-columns: 125px minmax(0, 1fr); gap: 8px 16px; margin: 0 0 18px; }
+    #es-recovery-console dt { color: var(--er-muted); }
+    #es-recovery-console dd { margin: 0; overflow-wrap: anywhere; }
+    #es-recovery-console .er-strong { font-weight: 500; }
+    #es-recovery-console .er-muted { color: var(--er-muted); }
+    #es-recovery-console .er-notice { border-radius: 7px; padding: 13px 15px; background: var(--er-red-bg); color: var(--er-red); }
+    #es-recovery-console .er-notice[data-tone=&quot;wait&quot;] { background: var(--er-amber-bg); color: var(--er-amber); }
+    #es-recovery-console .er-notice[data-tone=&quot;good&quot;] { background: var(--er-green-bg); color: var(--er-green); }
+    #es-recovery-console .er-notice-title { display: block; font-weight: 500; }
+    #es-recovery-console .er-notice-detail { display: block; margin-top: 3px; }
+    #es-recovery-console details { margin-top: 14px; }
+    #es-recovery-console summary { cursor: pointer; color: var(--er-muted); }
+    #es-recovery-console .er-diagnostic { margin: 10px 0 0; padding: 12px 14px; background: var(--er-subtle); border-radius: 6px; overflow-wrap: anywhere; }
+    #es-recovery-console code { font: 400 13px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; color: inherit; background: transparent; padding: 0; white-space: normal; }
+    #es-recovery-console .er-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 18px; }
+    #es-recovery-console button, #es-recovery-console .er-link-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; border: 1px solid var(--er-line); border-radius: 6px; padding: 7px 13px; background: var(--er-surface); color: var(--er-text); font: inherit; font-weight: 500; cursor: pointer; text-decoration: none; text-align: center; }
+    #es-recovery-console button.er-primary { background: var(--er-primary); color: var(--er-on-primary); border-color: var(--er-primary); }
+    #es-recovery-console button:disabled { cursor: not-allowed; background: var(--er-subtle); color: var(--er-muted); border-color: var(--er-line); }
+    #es-recovery-console a.er-plain-link { color: var(--er-blue); text-decoration: none; }
+    #es-recovery-console a:hover { text-decoration: underline; }
+    #es-recovery-console button:not(:disabled):hover { filter: brightness(0.96); }
+    #es-recovery-console .er-form { margin-top: 20px; padding-top: 19px; border-top: 1px solid var(--er-line); }
+    #es-recovery-console .er-form-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+    #es-recovery-console .er-form-context { margin: 6px 0 16px; color: var(--er-muted); font-size: 12px; }
+    #es-recovery-console label { display: block; font-weight: 500; margin-bottom: 6px; }
+    #es-recovery-console select, #es-recovery-console textarea { display: block; width: 100%; min-width: 0; max-width: 100%; font: inherit; background: var(--er-surface); color: var(--er-text); border: 1px solid var(--er-line); border-radius: 6px; padding: 9px 10px; }
+    #es-recovery-console textarea { resize: vertical; min-height: 86px; }
+    #es-recovery-console textarea::placeholder { color: var(--er-muted); opacity: 1; }
+    #es-recovery-console .er-manual-fields { margin: 14px 0; padding: 0; border: 0; }
+    #es-recovery-console .er-manual-fields legend { padding: 0; margin-bottom: 8px; font-weight: 500; }
+    #es-recovery-console label.er-check { display: flex; gap: 9px; align-items: flex-start; font-weight: 400; margin-bottom: 9px; cursor: pointer; }
+    #es-recovery-console .er-check input { flex: 0 0 auto; margin: 4px 0 0; accent-color: var(--er-primary); width: 16px; height: 16px; }
+    #es-recovery-console .er-manual-label { margin-top: 14px; }
+    #es-recovery-console .er-error { color: var(--er-red); margin-top: 10px; }
+    #es-recovery-console .er-record { margin-top: 16px; padding: 12px 14px; background: var(--er-subtle); border-radius: 7px; }
+    #es-recovery-console .er-record-note { margin-top: 7px; overflow-wrap: anywhere; white-space: pre-wrap; }
+    #es-recovery-console .er-candidate { margin-top: 10px; min-height: 24px; color: var(--er-muted); }
+    #es-recovery-console .er-candidate[data-tone=&quot;bad&quot;] { color: var(--er-red); }
+    #es-recovery-console .er-candidate[data-tone=&quot;good&quot;] { color: var(--er-green); }
+    #es-recovery-console .er-effect { display: flex; align-items: flex-start; gap: 8px; margin-top: 13px; color: var(--er-muted); }
+    #es-recovery-console .er-effect i { flex-shrink: 0; margin-top: 3px; }
+    #es-recovery-console .er-assigned { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 15px 0 0; }
+    #es-recovery-console .er-assigned-state { color: var(--er-muted); margin-top: 4px; }
+    #es-recovery-console .er-validation { margin: 15px 0 0; padding: 0; list-style: none; }
+    #es-recovery-console .er-validation li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--er-line); }
+    #es-recovery-console .er-validation li:last-child { border-bottom: 0; }
+    #es-recovery-console .er-good-text { color: var(--er-green); }
+    #es-recovery-console .er-wait-text { color: var(--er-amber); }
+    #es-recovery-console .er-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 7px 16px; margin-top: 20px; padding-top: 13px; border-top: 1px solid var(--er-line); font-size: 12px; color: var(--er-muted); }
+    @media (max-width: 500px) {
+      #es-recovery-console .er-chrome { padding: 12px 15px; }
+      #es-recovery-console .er-content { padding: 17px 15px; }
+      #es-recovery-console .er-path { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      #es-recovery-console .er-stage:nth-child(2) { border-right: 0; }
+      #es-recovery-console .er-stage:nth-child(-n+2) { border-bottom: 1px solid var(--er-line); }
+      #es-recovery-console .er-context { grid-template-columns: 1fr; gap: 3px; }
+      #es-recovery-console dd { margin-bottom: 8px; }
+      #es-recovery-console select, #es-recovery-console textarea { font-size: 16px; }
+      #es-recovery-console .er-actions &gt; button, #es-recovery-console .er-actions &gt; a { flex: 1 1 180px; }
+    }
+    @media (pointer: coarse) {
+      #es-recovery-console button, #es-recovery-console .er-link-button, #es-recovery-console select { min-height: 44px; }
+      #es-recovery-console label.er-check { min-height: 44px; }
+    }
+  &lt;/style&gt;
+  &lt;section class=&quot;er-window&quot; aria-label=&quot;Восстановление dev&quot;&gt;
+    &lt;div class=&quot;er-chrome&quot;&gt;
+      &lt;div class=&quot;er-brand&quot;&gt;&lt;i data-lucide=&quot;activity&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Symphony &lt;span class=&quot;er-muted&quot;&gt;/ Delivery&lt;/span&gt;&lt;/div&gt;
+      &lt;span class=&quot;er-example&quot;&gt;Макет · пример данных&lt;/span&gt;
+    &lt;/div&gt;
+    &lt;div class=&quot;er-content&quot;&gt;
+      &lt;div class=&quot;er-heading&quot;&gt;
+        &lt;div&gt;&lt;div class=&quot;er-repo&quot;&gt;EmotionStat/app &lt;span class=&quot;er-muted&quot;&gt;· dev&lt;/span&gt;&lt;/div&gt;&lt;h2 data-role=&quot;panel-title&quot;&gt;Проверка dev&lt;/h2&gt;&lt;/div&gt;
+        &lt;span class=&quot;er-pill&quot; data-role=&quot;queue-badge&quot;&gt;Очередь приостановлена&lt;/span&gt;
+      &lt;/div&gt;
+      &lt;div class=&quot;er-path&quot; aria-label=&quot;Состояние цикла&quot;&gt;
+        &lt;div class=&quot;er-stage&quot; data-role=&quot;merge-stage&quot; data-tone=&quot;good&quot;&gt;&lt;span class=&quot;er-stage-title&quot;&gt;Исходный PR&lt;/span&gt;&lt;span class=&quot;er-stage-value&quot; data-role=&quot;merge-value&quot;&gt;Merged&lt;/span&gt;&lt;/div&gt;
+        &lt;div class=&quot;er-stage&quot; data-role=&quot;deploy-stage&quot; data-tone=&quot;bad&quot;&gt;&lt;span class=&quot;er-stage-title&quot;&gt;Деплой dev&lt;/span&gt;&lt;span class=&quot;er-stage-value&quot; data-role=&quot;deploy-value&quot;&gt;Ошибка&lt;/span&gt;&lt;/div&gt;
+        &lt;div class=&quot;er-stage&quot; data-role=&quot;validation-stage&quot;&gt;&lt;span class=&quot;er-stage-title&quot;&gt;Проверка dev&lt;/span&gt;&lt;span class=&quot;er-stage-value&quot; data-role=&quot;validation-value&quot;&gt;Ожидается&lt;/span&gt;&lt;/div&gt;
+        &lt;div class=&quot;er-stage&quot; data-role=&quot;next-stage&quot;&gt;&lt;span class=&quot;er-stage-title&quot;&gt;Следующая задача&lt;/span&gt;&lt;span class=&quot;er-stage-value&quot; data-role=&quot;next-value&quot;&gt;Ожидает&lt;/span&gt;&lt;/div&gt;
+      &lt;/div&gt;
+      &lt;dl class=&quot;er-context&quot;&gt;
+        &lt;dt&gt;Исходная задача&lt;/dt&gt;&lt;dd&gt;&lt;span class=&quot;er-strong&quot;&gt;#120 · Обновить расчёт индекса&lt;/span&gt;&lt;/dd&gt;
+        &lt;dt&gt;Связанный PR&lt;/dt&gt;&lt;dd data-role=&quot;source-pr&quot;&gt;#301 · merged в dev&lt;/dd&gt;
+        &lt;dt&gt;Проверка dev&lt;/dt&gt;&lt;dd data-role=&quot;validation-mode&quot;&gt;Вручную · smoke-тесты пока не настроены&lt;/dd&gt;
+      &lt;/dl&gt;
+      &lt;div class=&quot;er-notice&quot; data-role=&quot;notice&quot; aria-live=&quot;polite&quot;&gt;
+        &lt;span class=&quot;er-notice-title&quot; data-role=&quot;notice-title&quot;&gt;Контейнер не прошёл проверку готовности&lt;/span&gt;
+        &lt;span class=&quot;er-notice-detail&quot; data-role=&quot;notice-detail&quot;&gt;Назначьте задачу исправления или проверьте возможность повторного запуска в GitHub.&lt;/span&gt;
+      &lt;/div&gt;
+      &lt;details data-role=&quot;diagnostics&quot;&gt;
+        &lt;summary&gt;Диагностика запуска&lt;/summary&gt;
+        &lt;div class=&quot;er-diagnostic&quot;&gt;
+          &lt;div&gt;Workflow: &lt;code&gt;deploy-development.yml&lt;/code&gt;&lt;/div&gt;
+          &lt;div data-role=&quot;diagnostic-stage&quot;&gt;Этап: score_container_deploy&lt;/div&gt;
+          &lt;div data-role=&quot;run-context&quot;&gt;Запуск #918 · попытка 2 · dev SHA 8f31bc2&lt;/div&gt;
+          &lt;div class=&quot;er-muted&quot;&gt;GitHub Environment: development-score-containers&lt;/div&gt;
+        &lt;/div&gt;
+      &lt;/details&gt;
+      &lt;div class=&quot;er-actions&quot; data-role=&quot;initial-actions&quot;&gt;
+        &lt;button type=&quot;button&quot; class=&quot;er-primary&quot; data-role=&quot;open-assignment&quot;&gt;&lt;i data-lucide=&quot;git-pull-request&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;Назначить исправление&lt;/button&gt;
+        &lt;a class=&quot;er-link-button&quot; href=&quot;https://github.com/EmotionStat/app/actions&quot; target=&quot;_blank&quot; rel=&quot;noopener noreferrer&quot;&gt;Открыть Actions &lt;i data-lucide=&quot;arrow-up-right&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;/a&gt;
+      &lt;/div&gt;
+      &lt;div class=&quot;er-form&quot; data-role=&quot;assignment-form&quot; hidden&gt;
+        &lt;div class=&quot;er-form-heading&quot;&gt;&lt;h3&gt;Назначить задачу исправления&lt;/h3&gt;&lt;span class=&quot;er-muted&quot;&gt;Права владельца&lt;/span&gt;&lt;/div&gt;
+        &lt;div class=&quot;er-form-context&quot; data-role=&quot;assignment-context&quot;&gt;Цикл #120 · PR #301 · запуск #918 / 2 · SHA 8f31bc2&lt;/div&gt;
+        &lt;label for=&quot;er-recovery-issue&quot;&gt;Задача из Delivery&lt;/label&gt;
+        &lt;select id=&quot;er-recovery-issue&quot; aria-describedby=&quot;er-recovery-candidate&quot;&gt;
+          &lt;option value=&quot;&quot;&gt;Выберите задачу&lt;/option&gt;
+          &lt;option value=&quot;122&quot;&gt;#122 · Исправить готовность контейнера&lt;/option&gt;
+          &lt;option value=&quot;123&quot;&gt;#123 · Проверить миграцию&lt;/option&gt;
+        &lt;/select&gt;
+        &lt;div class=&quot;er-candidate&quot; id=&quot;er-recovery-candidate&quot; aria-live=&quot;polite&quot;&gt;Требуются Ready for agent и Agent allowed = yes.&lt;/div&gt;
+        &lt;div class=&quot;er-effect&quot;&gt;&lt;i data-lucide=&quot;lock-keyhole&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span&gt;Запустится только назначенное исправление. Остальные задачи останутся в ожидании.&lt;/span&gt;&lt;/div&gt;
+        &lt;div class=&quot;er-actions&quot;&gt;
+          &lt;button type=&quot;button&quot; class=&quot;er-primary&quot; data-role=&quot;confirm-assignment&quot; disabled&gt;Назначить задачу&lt;/button&gt;
+          &lt;button type=&quot;button&quot; data-role=&quot;cancel-assignment&quot;&gt;Отмена&lt;/button&gt;
+          &lt;a class=&quot;er-plain-link&quot; href=&quot;https://github.com/orgs/EmotionStat/projects/1&quot; target=&quot;_blank&quot; rel=&quot;noopener noreferrer&quot;&gt;Открыть Delivery&lt;/a&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
+      &lt;div class=&quot;er-assigned&quot; data-role=&quot;assigned-panel&quot; hidden aria-live=&quot;polite&quot;&gt;
+        &lt;div&gt;&lt;div class=&quot;er-strong&quot;&gt;#122 · Исправить готовность контейнера&lt;/div&gt;&lt;div class=&quot;er-assigned-state&quot; data-role=&quot;assigned-state&quot;&gt;Назначена для восстановления · ожидает запуска&lt;/div&gt;&lt;/div&gt;
+        &lt;span class=&quot;er-pill&quot; data-tone=&quot;wait&quot; data-role=&quot;recovery-badge&quot;&gt;Recovery&lt;/span&gt;
+      &lt;/div&gt;
+      &lt;ul class=&quot;er-validation&quot; data-role=&quot;validation-checks&quot; hidden aria-label=&quot;Проверка работоспособности dev&quot;&gt;
+        &lt;li&gt;&lt;span&gt;Проверка приложения&lt;/span&gt;&lt;span class=&quot;er-good-text&quot;&gt;Пройдена&lt;/span&gt;&lt;/li&gt;
+        &lt;li&gt;&lt;span&gt;Scheduler&lt;/span&gt;&lt;span class=&quot;er-good-text&quot;&gt;Проверен&lt;/span&gt;&lt;/li&gt;
+        &lt;li&gt;&lt;span&gt;Queue и доставка&lt;/span&gt;&lt;span data-role=&quot;queue-check&quot; class=&quot;er-wait-text&quot;&gt;Ожидается&lt;/span&gt;&lt;/li&gt;
+      &lt;/ul&gt;
+      &lt;div class=&quot;er-actions&quot; data-role=&quot;manual-actions&quot; hidden&gt;
+        &lt;button type=&quot;button&quot; class=&quot;er-primary&quot; data-role=&quot;open-manual&quot;&gt;Подтвердить ручную проверку dev&lt;/button&gt;
+        &lt;button type=&quot;button&quot; data-role=&quot;report-problem&quot;&gt;Обнаружена проблема&lt;/button&gt;
+      &lt;/div&gt;
+      &lt;div class=&quot;er-form&quot; data-role=&quot;manual-form&quot; hidden&gt;
+        &lt;div class=&quot;er-form-heading&quot;&gt;&lt;h3&gt;Результат ручной проверки&lt;/h3&gt;&lt;span class=&quot;er-muted&quot;&gt;Права владельца&lt;/span&gt;&lt;/div&gt;
+        &lt;div class=&quot;er-form-context&quot; data-role=&quot;manual-context&quot;&gt;EmotionStat/app · dev · SHA 9b30ac1 · запуск #919 / 1&lt;/div&gt;
+        &lt;label for=&quot;er-manual-result&quot;&gt;Результат&lt;/label&gt;
+        &lt;select id=&quot;er-manual-result&quot;&gt;
+          &lt;option value=&quot;&quot;&gt;Выберите результат проверки&lt;/option&gt;
+          &lt;option value=&quot;passed&quot;&gt;Работает — проверка пройдена&lt;/option&gt;
+          &lt;option value=&quot;failed&quot;&gt;Обнаружена проблема&lt;/option&gt;
+        &lt;/select&gt;
+        &lt;fieldset class=&quot;er-manual-fields&quot;&gt;
+          &lt;legend&gt;Выполненные проверки&lt;/legend&gt;
+          &lt;label class=&quot;er-check&quot;&gt;&lt;input type=&quot;checkbox&quot; data-check=&quot;app&quot;&gt;&lt;span&gt;Приложение и API доступны&lt;/span&gt;&lt;/label&gt;
+          &lt;label class=&quot;er-check&quot;&gt;&lt;input type=&quot;checkbox&quot; data-check=&quot;scenario&quot;&gt;&lt;span&gt;Контрольный сценарий с тестовыми данными выполнен&lt;/span&gt;&lt;/label&gt;
+          &lt;label class=&quot;er-check&quot;&gt;&lt;input type=&quot;checkbox&quot; data-check=&quot;services&quot;&gt;&lt;span&gt;Scheduler, Queue и доставка проверены; состояние соответствует ожидаемому&lt;/span&gt;&lt;/label&gt;
+        &lt;/fieldset&gt;
+        &lt;label class=&quot;er-manual-label&quot; for=&quot;er-manual-note&quot;&gt;Что проверено или какая проблема найдена&lt;/label&gt;
+        &lt;textarea id=&quot;er-manual-note&quot; rows=&quot;3&quot; placeholder=&quot;Опишите результат. Можно добавить ссылку на отчёт проверки.&quot;&gt;&lt;/textarea&gt;
+        &lt;div class=&quot;er-candidate&quot; data-role=&quot;manual-help&quot; aria-live=&quot;polite&quot;&gt;Для успешного результата подтвердите все проверки и добавьте комментарий.&lt;/div&gt;
+        &lt;div class=&quot;er-error&quot; data-role=&quot;manual-stale&quot; role=&quot;alert&quot; hidden&gt;Деплой изменился. Это подтверждение устарело — обновите данные и проверьте новую версию.&lt;/div&gt;
+        &lt;div class=&quot;er-effect&quot;&gt;&lt;i data-lucide=&quot;lock-keyhole&quot; aria-hidden=&quot;true&quot;&gt;&lt;/i&gt;&lt;span data-role=&quot;manual-effect&quot;&gt;Очередь откроется после сохранения успешного результата для актуального dev.&lt;/span&gt;&lt;/div&gt;
+        &lt;div class=&quot;er-actions&quot;&gt;
+          &lt;button type=&quot;button&quot; class=&quot;er-primary&quot; data-role=&quot;save-manual&quot; disabled&gt;Сохранить результат&lt;/button&gt;
+          &lt;button type=&quot;button&quot; data-role=&quot;cancel-manual&quot;&gt;Отмена&lt;/button&gt;
+        &lt;/div&gt;
+      &lt;/div&gt;
+      &lt;div class=&quot;er-record&quot; data-role=&quot;manual-record&quot; hidden aria-live=&quot;polite&quot;&gt;
+        &lt;div class=&quot;er-strong&quot; data-role=&quot;record-title&quot;&gt;Ручная проверка сохранена&lt;/div&gt;
+        &lt;div class=&quot;er-muted&quot; data-role=&quot;record-context&quot;&gt;&lt;/div&gt;
+        &lt;div class=&quot;er-record-note&quot; data-role=&quot;record-note&quot;&gt;&lt;/div&gt;
+      &lt;/div&gt;
+      &lt;div class=&quot;er-actions&quot; data-role=&quot;refresh-actions&quot; hidden&gt;&lt;button type=&quot;button&quot; data-role=&quot;refresh-state&quot;&gt;Обновить данные&lt;/button&gt;&lt;/div&gt;
+      &lt;div class=&quot;er-footer&quot;&gt;&lt;span data-role=&quot;footer-state&quot;&gt;Цикл сохранён · ожидается решение владельца&lt;/span&gt;&lt;span data-role=&quot;footer-actor&quot;&gt;Раннер наблюдает за dev&lt;/span&gt;&lt;/div&gt;
+    &lt;/div&gt;
+  &lt;/section&gt;
+  &lt;script&gt;
+    (() =&gt; {
+      const root = document.getElementById(&#x27;es-recovery-console&#x27;);
+      const find = (role) =&gt; root.querySelector(&#x27;[data-role=&quot;&#x27; + role + &#x27;&quot;]&#x27;);
+      const select = root.querySelector(&#x27;#er-recovery-issue&#x27;);
+      const candidate = root.querySelector(&#x27;#er-recovery-candidate&#x27;);
+      const resultInput = root.querySelector(&#x27;#er-manual-result&#x27;);
+      const noteInput = root.querySelector(&#x27;#er-manual-note&#x27;);
+      const checkInputs = [...root.querySelectorAll(&#x27;[data-check]&#x27;)];
+      const state = {
+        scenario: &#x27;manual_pending&#x27;, validationMode: &#x27;manual&#x27;, details: false, originalMerged: true,
+        assigning: false, selection: &#x27;&#x27;, refreshed: false, manualOpen: false,
+        result: &#x27;&#x27;, checks: { app: false, scenario: false, services: false }, note: &#x27;&#x27;,
+        snapshot: null, record: null, validationFault: false, recoveryPresent: false
+      };
+      const put = (role, value) =&gt; { find(role).textContent = value; };
+      const show = (role, visible) =&gt; { find(role).hidden = !visible; };
+      const stage = (role, value, tone) =&gt; { put(role + &#x27;-value&#x27;, value); find(role + &#x27;-stage&#x27;).dataset.tone = tone; };
+
+      function currentDeployment() {
+        if (state.scenario === &#x27;manual_stale&#x27; || state.refreshed) return { sha: &#x27;b49a11e&#x27;, run: 920, attempt: 1 };
+        if ([&#x27;manual_pending&#x27;, &#x27;manual_failed&#x27;, &#x27;validating&#x27;, &#x27;restored&#x27;].includes(state.scenario) || state.validationFault) return { sha: &#x27;9b30ac1&#x27;, run: 919, attempt: 1 };
+        return { sha: &#x27;8f31bc2&#x27;, run: 918, attempt: 2 };
+      }
+      function snapshotKey() {
+        return JSON.stringify({ repo: &#x27;EmotionStat/app&#x27;, branch: &#x27;dev&#x27;, cycle: 120, originalMerged: state.originalMerged, mode: state.validationMode, ...currentDeployment() });
+      }
+      function canAssign() { return [&#x27;failure&#x27;, &#x27;manual_failed&#x27;].includes(state.scenario); }
+      function canValidate() { return state.validationMode === &#x27;manual&#x27; &amp;&amp; [&#x27;manual_pending&#x27;, &#x27;manual_failed&#x27;].includes(state.scenario); }
+      function resetManual() {
+        state.manualOpen = false; state.result = &#x27;&#x27;; state.note = &#x27;&#x27;; state.snapshot = null;
+        state.checks = { app: false, scenario: false, services: false };
+      }
+
+      function renderManual() {
+        const stale = state.manualOpen &amp;&amp; (state.snapshot !== snapshotKey() || state.scenario === &#x27;manual_stale&#x27;);
+        const complete = state.note.trim().length &gt; 0 &amp;&amp; (state.result === &#x27;failed&#x27; || (state.result === &#x27;passed&#x27; &amp;&amp; Object.values(state.checks).every(Boolean)));
+        resultInput.value = state.result;
+        noteInput.value = state.note;
+        checkInputs.forEach(input =&gt; { input.checked = state.checks[input.dataset.check]; });
+        find(&#x27;save-manual&#x27;).disabled = !complete || stale || !canValidate();
+        put(&#x27;save-manual&#x27;, state.result === &#x27;passed&#x27; ? &#x27;Сохранить подтверждение&#x27; : state.result === &#x27;failed&#x27; ? &#x27;Сохранить проблему&#x27; : &#x27;Сохранить результат&#x27;);
+        show(&#x27;manual-stale&#x27;, stale);
+        put(&#x27;manual-help&#x27;, state.result === &#x27;failed&#x27; ? &#x27;Опишите проблему. Непройденные проверки можно оставить неотмеченными.&#x27; : &#x27;Для успешного результата подтвердите все проверки и добавьте комментарий.&#x27;);
+        put(&#x27;manual-effect&#x27;, state.result === &#x27;failed&#x27; ? &#x27;Проблема сохранится, очередь останется закрытой. Исправление назначается отдельно.&#x27; : state.originalMerged ? &#x27;Очередь откроется после сохранения успешного результата для актуального dev.&#x27; : &#x27;После успешной проверки возобновится задача #120. Следующая задача продолжит ждать.&#x27;);
+        const captured = state.snapshot ? JSON.parse(state.snapshot) : currentDeployment();
+        put(&#x27;manual-context&#x27;, &#x27;EmotionStat/app · dev · SHA &#x27; + captured.sha + &#x27; · запуск #&#x27; + captured.run + &#x27; / &#x27; + captured.attempt);
+      }
+
+      function renderCandidate() {
+        const valid = state.selection === &#x27;122&#x27;;
+        candidate.dataset.tone = state.selection ? (valid ? &#x27;good&#x27; : &#x27;bad&#x27;) : &#x27;&#x27;;
+        candidate.textContent = !state.selection
+          ? &#x27;Требуются Ready for agent и Agent allowed = yes.&#x27;
+          : valid
+            ? &#x27;#122 · Ready for agent · Agent allowed = yes · входит в разрешённый проект.&#x27;
+            : &#x27;#123 недоступна: Agent allowed = no. Разрешение меняется владельцем на доске.&#x27;;
+        if (state.selection &amp;&amp; !valid) candidate.setAttribute(&#x27;role&#x27;, &#x27;alert&#x27;);
+        else candidate.removeAttribute(&#x27;role&#x27;);
+        find(&#x27;confirm-assignment&#x27;).disabled = !valid || !canAssign();
+        put(&#x27;confirm-assignment&#x27;, valid ? &#x27;Назначить #122&#x27; : &#x27;Назначить задачу&#x27;);
+      }
+
+      function render() {
+        const scenario = state.scenario;
+        const healthy = scenario === &#x27;restored&#x27;;
+        const verifying = scenario === &#x27;validating&#x27;;
+        const manualPending = scenario === &#x27;manual_pending&#x27;;
+        const manualFailed = scenario === &#x27;manual_failed&#x27;;
+        const manualStale = scenario === &#x27;manual_stale&#x27;;
+        const assigned = [&#x27;assigned&#x27;, &#x27;review&#x27;, &#x27;validating&#x27;].includes(scenario) || (state.recoveryPresent &amp;&amp; ![&#x27;failure&#x27;, &#x27;stale&#x27;, &#x27;unavailable&#x27;].includes(scenario));
+        const unavailable = scenario === &#x27;unavailable&#x27;;
+        const stale = scenario === &#x27;stale&#x27;;
+        const free = healthy &amp;&amp; state.originalMerged;
+        const successfulDeploy = healthy || verifying || manualPending || manualFailed || (state.validationFault &amp;&amp; !manualStale);
+        const waitTone = assigned || manualPending || verifying || healthy;
+        const badge = find(&#x27;queue-badge&#x27;);
+        badge.dataset.tone = free ? &#x27;good&#x27; : (waitTone ? &#x27;wait&#x27; : &#x27;bad&#x27;);
+        put(&#x27;panel-title&#x27;, manualPending || manualFailed || manualStale || healthy ? &#x27;Проверка dev&#x27; : &#x27;Восстановление dev&#x27;);
+        put(&#x27;validation-mode&#x27;, state.validationMode === &#x27;manual&#x27; ? &#x27;Вручную · smoke-тесты пока не настроены&#x27; : &#x27;Автоматически · требуется результат smoke-тестов&#x27;);
+        put(&#x27;queue-badge&#x27;, free ? &#x27;Очередь готова&#x27; : &#x27;Очередь приостановлена&#x27;);
+        stage(&#x27;merge&#x27;, state.originalMerged ? &#x27;Merged&#x27; : &#x27;Приостановлен&#x27;, state.originalMerged ? &#x27;good&#x27; : &#x27;wait&#x27;);
+        stage(&#x27;deploy&#x27;, manualStale ? &#x27;Новый запуск&#x27; : successfulDeploy ? &#x27;Успешен&#x27; : unavailable ? &#x27;Нет данных&#x27; : &#x27;Ошибка&#x27;, successfulDeploy ? &#x27;good&#x27; : manualStale ? &#x27;wait&#x27; : &#x27;bad&#x27;);
+        stage(&#x27;validation&#x27;, healthy ? &#x27;Пройдена&#x27; : manualFailed ? &#x27;Не пройдена&#x27; : manualPending ? (state.validationMode === &#x27;manual&#x27; ? &#x27;Вручную&#x27; : &#x27;Нет результата&#x27;) : verifying ? &#x27;Ожидает Queue&#x27; : &#x27;Ожидается&#x27;, healthy ? &#x27;good&#x27; : manualFailed ? &#x27;bad&#x27; : &#x27;wait&#x27;);
+        stage(&#x27;next&#x27;, free ? &#x27;Допускается&#x27; : &#x27;Ожидает&#x27;, free ? &#x27;good&#x27; : &#x27;&#x27;);
+        put(&#x27;source-pr&#x27;, state.originalMerged ? &#x27;#301 · merged в dev&#x27; : &#x27;#301 · работа приостановлена до восстановления dev&#x27;);
+        find(&#x27;notice&#x27;).dataset.tone = healthy ? &#x27;good&#x27; : (waitTone ? &#x27;wait&#x27; : &#x27;bad&#x27;);
+        let title = &#x27;Контейнер не прошёл проверку готовности&#x27;;
+        let detail = &#x27;Назначьте задачу исправления или проверьте возможность повторного запуска в GitHub.&#x27;;
+        let footer = &#x27;Цикл сохранён · ожидается решение владельца&#x27;;
+        if (scenario === &#x27;assigned&#x27;) {
+          title = &#x27;Исправление назначено&#x27;;
+          detail = &#x27;Раннер допускает задачу #122. Новая ветка от текущего dev, затем PR и review.&#x27;;
+          footer = &#x27;Назначение сохранено · #122 связано с текущим сбоем&#x27;;
+        } else if (scenario === &#x27;review&#x27;) {
+          title = &#x27;Исправление готово к review&#x27;;
+          detail = &#x27;PR #302 направлен в dev. Раннер ожидает ручного merge и нового деплоя.&#x27;;
+          footer = &#x27;Цикл сохранён · ожидается merge PR #302&#x27;;
+        } else if (manualPending) {
+          title = state.validationMode === &#x27;manual&#x27; ? &#x27;Деплой успешен. Нужна ручная проверка dev&#x27; : &#x27;Деплой успешен. Нет результата smoke-тестов&#x27;;
+          detail = state.validationMode === &#x27;manual&#x27; ? &#x27;Проверьте приложение и нужные компоненты, затем сохраните результат для этой версии dev.&#x27; : &#x27;Ожидается автоматическая проверка. Отсутствие результата не переключает режим на ручной.&#x27;;
+          footer = &#x27;Цикл сохранён · очередь ждёт подтверждения готовности dev&#x27;;
+        } else if (manualFailed) {
+          title = &#x27;Ручная проверка выявила проблему&#x27;;
+          detail = &#x27;Очередь остаётся закрытой. Назначьте исправление или повторите проверку после восстановления.&#x27;;
+          footer = &#x27;Отрицательный результат сохранён · требуется восстановление&#x27;;
+        } else if (manualStale) {
+          title = &#x27;Подтверждение относится к прежнему деплою&#x27;;
+          detail = &#x27;В dev появился новый запуск. Обновите данные и проверьте актуальную версию.&#x27;;
+          footer = &#x27;Результат не сохранён · очередь остаётся закрытой&#x27;;
+        } else if (verifying) {
+          title = &#x27;Деплой успешен. Проверка dev ещё не завершена&#x27;;
+          detail = &#x27;Queue остаётся на паузе после предыдущего сбоя. Ожидается подтверждение восстановления доставки.&#x27;;
+          footer = &#x27;Цикл сохранён · ожидается подтверждение готовности dev&#x27;;
+        } else if (healthy) {
+          title = &#x27;Работоспособность dev подтверждена&#x27;;
+          detail = state.originalMerged ? &#x27;Следующая задача начнётся от проверенного dev.&#x27; : &#x27;Раннер возобновит исходную задачу #120. Следующая задача продолжит ждать.&#x27;;
+          footer = state.originalMerged ? &#x27;Цикл завершён · очередь готова к следующей задаче&#x27; : &#x27;Цикл сохранён · возобновляется исходная задача #120&#x27;;
+        } else if (stale) {
+          title = &#x27;Состояние сбоя изменилось&#x27;;
+          detail = &#x27;Появился новый запуск deployment. Обновите данные перед назначением исправления.&#x27;;
+          footer = &#x27;Назначение приостановлено · требуется свежая проверка&#x27;;
+        } else if (unavailable) {
+          title = &#x27;Не удалось проверить состояние GitHub&#x27;;
+          detail = &#x27;Данные о запуске недоступны. Назначение исправления станет доступно после успешной проверки.&#x27;;
+          footer = &#x27;Цикл сохранён · состояние не подтверждено&#x27;;
+        }
+        put(&#x27;notice-title&#x27;, title);
+        put(&#x27;notice-detail&#x27;, detail);
+        put(&#x27;footer-state&#x27;, footer);
+        put(&#x27;footer-actor&#x27;, healthy ? &#x27;Проверка привязана к dev SHA&#x27; : &#x27;Раннер наблюдает за dev&#x27;);
+        show(&#x27;initial-actions&#x27;, (canAssign() || stale || unavailable) &amp;&amp; !state.assigning &amp;&amp; !state.manualOpen);
+        find(&#x27;open-assignment&#x27;).disabled = stale || unavailable;
+        show(&#x27;assignment-form&#x27;, state.assigning &amp;&amp; canAssign());
+        show(&#x27;assigned-panel&#x27;, assigned);
+        show(&#x27;validation-checks&#x27;, verifying || (healthy &amp;&amp; state.validationMode === &#x27;automatic&#x27;));
+        show(&#x27;manual-actions&#x27;, canValidate() &amp;&amp; !state.manualOpen &amp;&amp; !state.assigning);
+        put(&#x27;open-manual&#x27;, manualFailed ? &#x27;Повторить ручную проверку&#x27; : &#x27;Подтвердить ручную проверку dev&#x27;);
+        show(&#x27;manual-form&#x27;, state.manualOpen);
+        show(&#x27;manual-record&#x27;, Boolean(state.record) &amp;&amp; [&#x27;manual_failed&#x27;, &#x27;restored&#x27;].includes(scenario));
+        show(&#x27;refresh-actions&#x27;, stale || unavailable || manualStale);
+        find(&#x27;diagnostics&#x27;).open = state.details;
+        const deployment = currentDeployment();
+        put(&#x27;run-context&#x27;, &#x27;Запуск #&#x27; + deployment.run + &#x27; · попытка &#x27; + deployment.attempt + &#x27; · dev SHA &#x27; + deployment.sha);
+        put(&#x27;diagnostic-stage&#x27;, successfulDeploy ? &#x27;Deployment и завершающие задания: успешно&#x27; : manualStale ? &#x27;Новый deployment: ожидается завершение&#x27; : &#x27;Этап сбоя: score_container_deploy&#x27;);
+        put(&#x27;assignment-context&#x27;, &#x27;Цикл #120 · PR #301 · запуск #&#x27; + deployment.run + &#x27; / &#x27; + deployment.attempt + &#x27; · SHA &#x27; + deployment.sha);
+        put(&#x27;assigned-state&#x27;, scenario === &#x27;assigned&#x27; ? &#x27;Назначена для восстановления · ожидает запуска&#x27; : scenario === &#x27;review&#x27; ? &#x27;PR #302 · ожидается review и merge&#x27; : healthy ? &#x27;PR #302 merged · исправление проверено&#x27; : &#x27;PR #302 merged · ожидается проверка dev&#x27;);
+        put(&#x27;recovery-badge&#x27;, healthy ? &#x27;Проверено&#x27; : &#x27;Recovery&#x27;);
+        find(&#x27;recovery-badge&#x27;).dataset.tone = healthy ? &#x27;good&#x27; : &#x27;wait&#x27;;
+        put(&#x27;queue-check&#x27;, healthy ? &#x27;Проверена&#x27; : &#x27;Ожидается&#x27;);
+        find(&#x27;queue-check&#x27;).className = healthy ? &#x27;er-good-text&#x27; : &#x27;er-wait-text&#x27;;
+        select.value = state.selection;
+        renderCandidate();
+        renderManual();
+        if (state.record) {
+          put(&#x27;record-title&#x27;, state.record.result === &#x27;passed&#x27; ? &#x27;Ручная проверка подтверждена&#x27; : &#x27;Проблема зафиксирована&#x27;);
+          put(&#x27;record-context&#x27;, &#x27;Владелец раннера · &#x27; + state.record.time + &#x27; · SHA &#x27; + state.record.sha + &#x27; · запуск #&#x27; + state.record.run + &#x27; / &#x27; + state.record.attempt);
+          put(&#x27;record-note&#x27;, state.record.note);
+        }
+      }
+
+      find(&#x27;open-assignment&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; {
+        if (!canAssign()) return;
+        state.assigning = true;
+        render();
+        select.focus();
+      });
+      select.addEventListener(&#x27;change&#x27;, () =&gt; { state.selection = select.value; renderCandidate(); });
+      find(&#x27;cancel-assignment&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; { state.assigning = false; render(); find(&#x27;open-assignment&#x27;).focus(); });
+      find(&#x27;confirm-assignment&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; {
+        if (state.selection !== &#x27;122&#x27; || !canAssign()) return;
+        state.validationFault = state.scenario === &#x27;manual_failed&#x27;;
+        state.recoveryPresent = true;
+        state.scenario = &#x27;assigned&#x27;;
+        state.assigning = false;
+        render();
+      });
+      find(&#x27;refresh-state&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; {
+        const wasManual = state.scenario === &#x27;manual_stale&#x27;;
+        state.scenario = wasManual ? &#x27;manual_pending&#x27; : &#x27;failure&#x27;; state.refreshed = true; state.selection = &#x27;&#x27;; state.assigning = false; state.record = null; resetManual(); render();
+      });
+      function openManual(result) {
+        if (!canValidate()) return;
+        resetManual();
+        state.manualOpen = true; state.result = result; state.snapshot = snapshotKey();
+        render(); resultInput.focus();
+      }
+      find(&#x27;open-manual&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; openManual(&#x27;passed&#x27;));
+      find(&#x27;report-problem&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; openManual(&#x27;failed&#x27;));
+      find(&#x27;cancel-manual&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; { resetManual(); render(); if (canValidate()) find(&#x27;open-manual&#x27;).focus(); });
+      resultInput.addEventListener(&#x27;change&#x27;, () =&gt; { state.result = resultInput.value; renderManual(); });
+      noteInput.addEventListener(&#x27;input&#x27;, () =&gt; { state.note = noteInput.value; renderManual(); });
+      checkInputs.forEach(input =&gt; input.addEventListener(&#x27;change&#x27;, () =&gt; { state.checks[input.dataset.check] = input.checked; renderManual(); }));
+      find(&#x27;save-manual&#x27;).addEventListener(&#x27;click&#x27;, () =&gt; {
+        if (!canValidate() || !state.manualOpen || state.snapshot !== snapshotKey()) { renderManual(); return; }
+        const complete = state.note.trim().length &gt; 0 &amp;&amp; (state.result === &#x27;failed&#x27; || (state.result === &#x27;passed&#x27; &amp;&amp; Object.values(state.checks).every(Boolean)));
+        if (!complete) return;
+        state.record = { ...currentDeployment(), result: state.result, note: state.note.trim(), checks: { ...state.checks }, time: new Date().toLocaleString(&#x27;ru-RU&#x27;) };
+        state.scenario = state.result === &#x27;passed&#x27; ? &#x27;restored&#x27; : &#x27;manual_failed&#x27;;
+        state.validationFault = state.result === &#x27;failed&#x27;; state.manualOpen = false; render();
+      });
+      find(&#x27;diagnostics&#x27;).addEventListener(&#x27;toggle&#x27;, () =&gt; { state.details = find(&#x27;diagnostics&#x27;).open; });
+      render();
+      if (globalThis.Tweak) {
+        let designContext = [state.scenario, state.validationMode, state.originalMerged].join(&#x27;|&#x27;);
+        const tweak = new Tweak({ container: root, onChange: () =&gt; {
+          const nextContext = [state.scenario, state.validationMode, state.originalMerged].join(&#x27;|&#x27;);
+          if (nextContext !== designContext) {
+            const retainStaleForm = state.scenario === &#x27;manual_stale&#x27; &amp;&amp; state.manualOpen;
+            state.assigning = false; state.selection = &#x27;&#x27;; state.record = null; state.refreshed = false;
+            state.validationFault = state.scenario === &#x27;manual_failed&#x27;;
+            state.recoveryPresent = [&#x27;assigned&#x27;, &#x27;review&#x27;, &#x27;validating&#x27;].includes(state.scenario);
+            if (!retainStaleForm) resetManual();
+            designContext = nextContext;
+          }
+          render();
+        } });
+        tweak.addSelect(state, &#x27;scenario&#x27;, { label: &#x27;Состояние панели&#x27;, options: [
+          { label: &#x27;Деплой успешен: ручная проверка&#x27;, value: &#x27;manual_pending&#x27; },
+          { label: &#x27;Ручная проверка выявила проблему&#x27;, value: &#x27;manual_failed&#x27; },
+          { label: &#x27;Подтверждение устарело&#x27;, value: &#x27;manual_stale&#x27; },
+          { label: &#x27;Сбой: назначить исправление&#x27;, value: &#x27;failure&#x27; },
+          { label: &#x27;Исправление назначено&#x27;, value: &#x27;assigned&#x27; },
+          { label: &#x27;PR исправления на review&#x27;, value: &#x27;review&#x27; },
+          { label: &#x27;Деплой успешен, Queue на паузе&#x27;, value: &#x27;validating&#x27; },
+          { label: &#x27;Dev проверен&#x27;, value: &#x27;restored&#x27; },
+          { label: &#x27;Данные сбоя устарели&#x27;, value: &#x27;stale&#x27; },
+          { label: &#x27;GitHub недоступен&#x27;, value: &#x27;unavailable&#x27; }
+        ] });
+        tweak.addSelect(state, &#x27;validationMode&#x27;, { label: &#x27;Режим проверки dev&#x27;, options: [{ label: &#x27;Ручной · первая версия&#x27;, value: &#x27;manual&#x27; }, { label: &#x27;Автоматический · после smoke-тестов&#x27;, value: &#x27;automatic&#x27; }] });
+        tweak.addToggle(state, &#x27;details&#x27;, { label: &#x27;Диагностика развёрнута&#x27; });
+        tweak.addToggle(state, &#x27;originalMerged&#x27;, { label: &#x27;Исходный PR уже merged&#x27; });
+      }
+    })();
+  &lt;/script&gt;
+&lt;/div&gt;
+
+&lt;script src=&quot;https://unpkg.com/@floating-ui/core@1.7.3/dist/floating-ui.core.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script src=&quot;https://unpkg.com/@floating-ui/dom@1.7.4/dist/floating-ui.dom.umd.min.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  if (window.FloatingUIDOM == null) {
+    return;
+  }
+  const { autoUpdate, computePosition, flip, offset, shift, size } =
+    window.FloatingUIDOM;
+  const tooltipPlacements = new Set([&quot;top&quot;, &quot;right&quot;, &quot;bottom&quot;, &quot;left&quot;]);
+  const tooltipId = `codex-visualization-tooltip-${
+    window.crypto?.randomUUID?.() ?? Date.now().toString(36)
+  }`;
+  const tooltipGap = 5;
+  const hoverDelay = 700;
+  const skipDelay = 300;
+  let activeTrigger = null;
+  let pendingTrigger = null;
+  let tooltip = null;
+  let openTimeout = null;
+  let autoUpdateCleanup = null;
+  let positionRequest = 0;
+  let skipDelayUntil = 0;
+  let lastPointerWasTouch = false;
+  let pinnedByTouch = false;
+
+  const getTrigger = (target) =&gt;
+    target?.nodeType === Node.ELEMENT_NODE
+      ? target.closest(&quot;[data-tooltip]&quot;)
+      : null;
+  const containsTarget = (trigger, target) =&gt;
+    target?.nodeType != null &amp;&amp; trigger.contains(target);
+  const getContent = (trigger) =&gt;
+    trigger.getAttribute(&quot;data-tooltip&quot;)?.trim() ?? &quot;&quot;;
+  const getPlacement = (trigger) =&gt; {
+    const placement = trigger.getAttribute(&quot;data-tooltip-placement&quot;);
+    return tooltipPlacements.has(placement) ? placement : &quot;top&quot;;
+  };
+  const getTooltip = () =&gt; {
+    if (tooltip == null) {
+      tooltip = document.createElement(&quot;div&quot;);
+      tooltip.id = tooltipId;
+      tooltip.className = &quot;tooltip&quot;;
+      tooltip.setAttribute(&quot;role&quot;, &quot;tooltip&quot;);
+    }
+    return tooltip;
+  };
+  const setDescribedBy = (trigger, described) =&gt; {
+    const ids = new Set(
+      (trigger.getAttribute(&quot;aria-describedby&quot;) ?? &quot;&quot;)
+        .split(/\s+/)
+        .filter(Boolean),
+    );
+    if (described) {
+      ids.add(tooltipId);
+    } else {
+      ids.delete(tooltipId);
+    }
+    if (ids.size === 0) {
+      trigger.removeAttribute(&quot;aria-describedby&quot;);
+    } else {
+      trigger.setAttribute(&quot;aria-describedby&quot;, [...ids].join(&quot; &quot;));
+    }
+  };
+  const clearOpenTimeout = () =&gt; {
+    if (openTimeout != null) {
+      window.clearTimeout(openTimeout);
+      openTimeout = null;
+    }
+    pendingTrigger = null;
+  };
+  const closeTooltip = (activateSkipDelay = true) =&gt; {
+    clearOpenTimeout();
+    pinnedByTouch = false;
+    positionRequest += 1;
+    autoUpdateCleanup?.();
+    autoUpdateCleanup = null;
+    if (activeTrigger == null) {
+      return;
+    }
+    setDescribedBy(activeTrigger, false);
+    activeTrigger = null;
+    tooltip?.remove();
+    if (activateSkipDelay) {
+      skipDelayUntil = Date.now() + skipDelay;
+    }
+  };
+  const updatePosition = (trigger, floating) =&gt; {
+    const request = ++positionRequest;
+    void computePosition(trigger, floating, {
+      middleware: [
+        offset(tooltipGap),
+        flip({ padding: tooltipGap }),
+        shift({ padding: tooltipGap }),
+        size({
+          padding: tooltipGap,
+          apply({ availableHeight, availableWidth, elements }) {
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-width&quot;,
+              `${Math.max(0, availableWidth)}px`,
+            );
+            elements.floating.style.setProperty(
+              &quot;--tooltip-available-height&quot;,
+              `${Math.max(0, availableHeight)}px`,
+            );
+          },
+        }),
+      ],
+      placement: getPlacement(trigger),
+      strategy: &quot;fixed&quot;,
+    })
+      .then(({ x, y }) =&gt; {
+        if (activeTrigger !== trigger || request !== positionRequest) {
+          return;
+        }
+        const scale = window.devicePixelRatio || 1;
+        floating.style.transform = `translate(${Math.round(x * scale) / scale}px, ${Math.round(y * scale) / scale}px)`;
+        floating.style.visibility = &quot;visible&quot;;
+      })
+      .catch(() =&gt; {
+        if (activeTrigger === trigger &amp;&amp; request === positionRequest) {
+          closeTooltip(false);
+        }
+      });
+  };
+  const openTooltip = (trigger) =&gt; {
+    const content = getContent(trigger);
+    if (!trigger.isConnected || content.length === 0) {
+      return;
+    }
+    clearOpenTimeout();
+    if (activeTrigger === trigger) {
+      return;
+    }
+    closeTooltip();
+    const floating = getTooltip();
+    floating.textContent = content;
+    floating.style.visibility = &quot;hidden&quot;;
+    floating.style.transform = &quot;translate(0, 0)&quot;;
+    document.body.appendChild(floating);
+    activeTrigger = trigger;
+    setDescribedBy(trigger, true);
+    autoUpdateCleanup = autoUpdate(trigger, floating, () =&gt; {
+      updatePosition(trigger, floating);
+    });
+  };
+  const requestOpen = (trigger, immediate = false) =&gt; {
+    if (
+      getContent(trigger).length === 0 ||
+      activeTrigger === trigger ||
+      pendingTrigger === trigger
+    ) {
+      return;
+    }
+    clearOpenTimeout();
+    pendingTrigger = trigger;
+    const delay =
+      immediate || activeTrigger != null || Date.now() &lt; skipDelayUntil
+        ? 0
+        : hoverDelay;
+    if (delay === 0) {
+      openTooltip(trigger);
+      return;
+    }
+    openTimeout = window.setTimeout(() =&gt; {
+      openTimeout = null;
+      pendingTrigger = null;
+      openTooltip(trigger);
+    }, delay);
+  };
+  const handlePointerOpen = (event) =&gt; {
+    if (event.pointerType === &quot;touch&quot;) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    requestOpen(trigger);
+  };
+  const handlePointer = (event) =&gt; {
+    lastPointerWasTouch =
+      event.type === &quot;pointerdown&quot; &amp;&amp; event.pointerType === &quot;touch&quot;;
+  };
+  const handleTouchClick = (event) =&gt; {
+    const isTouch = event.pointerType === &quot;touch&quot; || lastPointerWasTouch;
+    lastPointerWasTouch = false;
+    if (!isTouch || event.detail === 0) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (
+      trigger == null ||
+      !trigger.isConnected ||
+      getContent(trigger).length === 0 ||
+      (pinnedByTouch &amp;&amp; activeTrigger === trigger)
+    ) {
+      if (pinnedByTouch) {
+        closeTooltip();
+      }
+      return;
+    }
+    openTooltip(trigger);
+    pinnedByTouch = activeTrigger === trigger;
+    window.setTimeout(() =&gt; {
+      if (activeTrigger === trigger &amp;&amp; !trigger.isConnected) {
+        closeTooltip(false);
+      }
+    }, 0);
+  };
+  const handleLeave = (event) =&gt; {
+    if (pinnedByTouch) {
+      return;
+    }
+    const trigger = getTrigger(event.target);
+    if (trigger == null || containsTarget(trigger, event.relatedTarget)) {
+      return;
+    }
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const handleFocusIn = (event) =&gt; {
+    const trigger = getTrigger(event.target);
+    if (trigger?.matches(&quot;:focus-visible&quot;)) {
+      requestOpen(trigger, true);
+    }
+  };
+  const handleKeyDown = (event) =&gt; {
+    if (event.key === &quot;Escape&quot;) {
+      closeTooltip();
+    }
+  };
+  const handleContextMenu = (event) =&gt; {
+    lastPointerWasTouch = false;
+    const trigger = getTrigger(event.target);
+    if (activeTrigger === trigger || pendingTrigger === trigger) {
+      closeTooltip();
+    }
+  };
+  const destroy = () =&gt; {
+    closeTooltip(false);
+    lastPointerWasTouch = false;
+    document.removeEventListener(&quot;pointerover&quot;, handlePointerOpen);
+    document.removeEventListener(&quot;pointerdown&quot;, handlePointer);
+    document.removeEventListener(&quot;pointercancel&quot;, handlePointer);
+    document.removeEventListener(&quot;click&quot;, handleTouchClick);
+    document.removeEventListener(&quot;pointerout&quot;, handleLeave);
+    document.removeEventListener(&quot;focusin&quot;, handleFocusIn);
+    document.removeEventListener(&quot;focusout&quot;, handleLeave);
+    document.removeEventListener(&quot;keydown&quot;, handleKeyDown);
+    document.removeEventListener(&quot;contextmenu&quot;, handleContextMenu);
+    tooltip = null;
+  };
+
+  document.addEventListener(&quot;pointerover&quot;, handlePointerOpen);
+  document.addEventListener(&quot;pointerdown&quot;, handlePointer);
+  document.addEventListener(&quot;pointercancel&quot;, handlePointer);
+  document.addEventListener(&quot;click&quot;, handleTouchClick);
+  document.addEventListener(&quot;pointerout&quot;, handleLeave);
+  document.addEventListener(&quot;focusin&quot;, handleFocusIn);
+  document.addEventListener(&quot;focusout&quot;, handleLeave);
+  document.addEventListener(&quot;keydown&quot;, handleKeyDown);
+  document.addEventListener(&quot;contextmenu&quot;, handleContextMenu);
+  window.addEventListener(&quot;pagehide&quot;, destroy, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-tabs&quot;&gt;
+(() =&gt; {
+  const selector = &#x27;.nav[role=&quot;tablist&quot;] [role=&quot;tab&quot;]&#x27;;
+  const disabled = &#x27;:disabled,[aria-disabled=&quot;true&quot;]&#x27;;
+  const selectTab = (selected) =&gt; {
+    const panelId = selected.getAttribute(&quot;aria-controls&quot;);
+    for (const tab of selected.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;)) {
+      const active = tab === selected;
+      tab.classList.toggle(&quot;active&quot;, active);
+      tab.setAttribute(&quot;aria-selected&quot;, String(active));
+      const id = tab.getAttribute(&quot;aria-controls&quot;);
+      const panel = id &amp;&amp; document.getElementById(id);
+      if (panel != null) {
+        panel.hidden = id !== panelId;
+        if (!panel.hidden &amp;&amp; selected.id) {
+          panel.setAttribute(&quot;aria-labelledby&quot;, selected.id);
+        }
+      }
+    }
+  };
+  const interact = (event) =&gt; {
+    const tab = event.target?.closest?.(selector);
+    if (event.defaultPrevented || tab == null || tab.matches(disabled)) {
+      return;
+    }
+    if (event.type === &quot;click&quot;) {
+      selectTab(tab);
+      return;
+    }
+    const tabs = Array.from(
+      tab.closest(&#x27;[role=&quot;tablist&quot;]&#x27;).querySelectorAll(&#x27;[role=&quot;tab&quot;]&#x27;),
+    ).filter((candidate) =&gt; !candidate.matches(disabled));
+    const current = tabs.indexOf(tab);
+    let next;
+    if (event.key === &quot;ArrowRight&quot; || event.key === &quot;ArrowDown&quot;) {
+      next = (current + 1) % tabs.length;
+    } else if (event.key === &quot;ArrowLeft&quot; || event.key === &quot;ArrowUp&quot;) {
+      next = (current + tabs.length - 1) % tabs.length;
+    } else if (event.key === &quot;Home&quot;) {
+      next = 0;
+    } else if (event.key === &quot;End&quot;) {
+      next = tabs.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    tabs[next].focus();
+    selectTab(tabs[next]);
+  };
+
+  for (const list of document.querySelectorAll(&#x27;.nav[role=&quot;tablist&quot;]&#x27;)) {
+    const selected =
+      list.querySelector(&#x27;[role=&quot;tab&quot;][aria-selected=&quot;true&quot;]&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;].active&#x27;) ??
+      list.querySelector(&#x27;[role=&quot;tab&quot;]&#x27;);
+    if (selected != null) {
+      selectTab(selected);
+    }
+  }
+  document.addEventListener(&quot;click&quot;, interact);
+  document.addEventListener(&quot;keydown&quot;, interact);
+  window.addEventListener(&quot;pagehide&quot;, () =&gt; {
+    document.removeEventListener(&quot;click&quot;, interact);
+    document.removeEventListener(&quot;keydown&quot;, interact);
+  }, { once: true });
+})();
+&lt;/script&gt;
+&lt;script id=&quot;codex-visualization-lucide&quot; async src=&quot;https://unpkg.com/lucide@1.17.0/dist/umd/lucide.js&quot;&gt;&lt;/script&gt;
+&lt;script&gt;
+(() =&gt; {
+  const initialize = () =&gt; {
+    globalThis.lucide?.createIcons({ attrs: { width: 16, height: 16 } });
+  };
+  if (globalThis.lucide != null) {
+    initialize();
+    return;
+  }
+  document
+    .getElementById(&quot;codex-visualization-lucide&quot;)
+    ?.addEventListener(&quot;load&quot;, initialize, { once: true });
+})();
+&lt;/script&gt;
+
+&lt;/body&gt;
+&lt;/html&gt;
+"></iframe>
+</body>
+</html>
