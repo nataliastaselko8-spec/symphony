@@ -1264,6 +1264,14 @@ MUST reject the inspection-only kind, and workflow reload MUST retain the previo
 configuration when a change to that kind is rejected. The Elixir implementation documents this
 staged extension for `github_projects` in `elixir/docs/github_projects.md`.
 
+When an implementation supports GitHub App authentication, bound sessions MUST retain an
+immutable App/installation and repository/Project scope while resolving current credentials
+for each request. Installation tokens MUST be treated as opaque strings, scoped explicitly,
+and refreshed from their API-reported expiry. A failed refresh MUST NOT select another
+credential or return an expired token. Finite inspection MUST own and release its credential
+cache without starting the agent runtime. Credentials MUST remain on the controller; an
+ambiguous mutation MUST NOT be replayed automatically during authentication refresh.
+
 ### 11.3 Normalization Rules
 
 Adapter output MUST satisfy Section 4.1.1. In addition:

@@ -252,9 +252,11 @@ codex:
   repository issue number, `issue.identifier` is `GH-<number>`, hidden or deleted `404` issues are
   omitted on refresh, and pull requests returned by the Issues API are not dispatchable.
 - Tool and auth: `github_api` accepts a relative REST `path` plus optional `params` and JSON
-  `body`; Symphony executes it host-side with the session-bound token, removes configured tracker
+  `body`; Symphony executes it host-side with the bound credentials, removes configured tracker
   credentials and provider authentication aliases from the Codex child, and leaves raw tool access
-  limited by that token's GitHub permissions.
+  limited by that token's GitHub permissions. [GitHub App mode](docs/github_app_credentials.md)
+  freezes the installation/repository scope, renews tokens per request and restricts REST paths
+  to that repository.
 
 ### GitHub Projects inspection
 
@@ -262,7 +264,9 @@ Use `tracker.kind: github_projects` with `--dry-run` for a finite JSON inspectio
 organization Project. This adapter is inspection-only; normal runtime startup and switching a
 running workflow to this kind are rejected. Board eligibility is not permission to start an
 agent. See the [profile, example and read contract](docs/github_projects.md). No GitHub App is
-needed for synthetic tests; a pre-issued read-scoped installation token is required for live reads.
+needed for synthetic tests. Live reads support
+[GitHub App authentication and token renewal](docs/github_app_credentials.md) on the controller,
+or an externally supplied token.
 
 ### Jira Cloud adapter
 

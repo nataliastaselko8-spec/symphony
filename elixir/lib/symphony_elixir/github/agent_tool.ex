@@ -56,7 +56,7 @@ defmodule SymphonyElixir.GitHub.AgentTool do
 
   defp execute_github_api(arguments, opts) do
     github_client = Keyword.get(opts, :github_client, &Client.request/5)
-    client_opts = Keyword.take(opts, [:tracker_settings])
+    client_opts = Keyword.take(opts, [:tracker_settings, :credentials_cache])
 
     with {:ok, method, path, params, body} <- normalize_arguments(arguments),
          {:ok, %{status: status, body: response_body}} <-

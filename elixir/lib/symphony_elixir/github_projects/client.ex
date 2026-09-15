@@ -7,6 +7,7 @@ defmodule SymphonyElixir.GitHubProjects.Client do
   """
 
   alias SymphonyElixir.Config
+  alias SymphonyElixir.GitHub.Credentials
   alias SymphonyElixir.GitHubProjects.{Normalizer, Schema, Settings}
   alias SymphonyElixir.Tracker.Issue
 
@@ -418,7 +419,15 @@ defmodule SymphonyElixir.GitHubProjects.Client do
         perform_request(query, vars, config, Keyword.get(opts, :req_adapter))
       end)
 
-    case safe_request(request_fun, graphql, variables, settings) do
+    with {:ok, token} <- request_token(settings, opts) do
+      response = safe_request(request_fun, graphql, variables, Map.put(settings, :token, token))
+      invalidate_unauthorized(response, settings, token, opts)
+      query_response(response, mode)
+    end
+  end
+
+  defp query_response(response, mode) do
+    case response do
       {:ok, %{status: 200, body: %{} = body}} ->
         graphql_data(body, mode)
 
@@ -432,6 +441,16 @@ defmodule SymphonyElixir.GitHubProjects.Client do
         {:error, :github_projects_invalid_response}
     end
   end
+
+  defp request_token(%{credential_reference: nil, token: token}, _opts), do: {:ok, token}
+  defp request_token(%{credential_reference: reference}, opts), do: Credentials.token(reference, opts)
+
+  defp invalidate_unauthorized({:ok, %{status: 401}}, %{credential_reference: reference}, token, opts)
+       when not is_nil(reference) do
+    Credentials.invalidate(reference, token, opts)
+  end
+
+  defp invalidate_unauthorized(_response, _settings, _token, _opts), do: :ok
 
   defp safe_request(request_fun, graphql, variables, settings) do
     request_fun.(graphql, variables, settings)

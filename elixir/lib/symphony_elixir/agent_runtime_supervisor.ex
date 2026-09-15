@@ -5,6 +5,8 @@ defmodule SymphonyElixir.AgentRuntimeSupervisor do
 
   use Supervisor
 
+  alias SymphonyElixir.GitHub.Credentials.Cache
+
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -18,7 +20,10 @@ defmodule SymphonyElixir.AgentRuntimeSupervisor do
 
     orchestrator_name = Keyword.get(opts, :orchestrator_name, SymphonyElixir.Orchestrator)
 
+    credentials_cache_name = Keyword.get(opts, :credentials_cache_name, Cache)
+
     children = [
+      {Cache, name: credentials_cache_name},
       Supervisor.child_spec(
         {Task.Supervisor, name: task_supervisor_name},
         id: task_supervisor_name

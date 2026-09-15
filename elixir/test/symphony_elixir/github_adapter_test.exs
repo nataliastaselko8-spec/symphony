@@ -98,7 +98,11 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
              "GH_TOKEN",
              "GITHUB_ENTERPRISE_TOKEN",
              "GH_ENTERPRISE_TOKEN",
-             "SYMPHONY_GITHUB_TOKEN"
+             "SYMPHONY_GITHUB_TOKEN",
+             "SYMPHONY_GITHUB_APP_ID",
+             "SYMPHONY_GITHUB_APP_CLIENT_ID",
+             "SYMPHONY_GITHUB_INSTALLATION_ID",
+             "SYMPHONY_GITHUB_APP_PRIVATE_KEY_PATH"
            ]
   end
 
@@ -389,7 +393,11 @@ defmodule SymphonyElixir.GitHub.AdapterTest do
              "GH_TOKEN",
              "GITHUB_ENTERPRISE_TOKEN",
              "GH_ENTERPRISE_TOKEN",
-             token_env
+             token_env,
+             "SYMPHONY_GITHUB_APP_ID",
+             "SYMPHONY_GITHUB_APP_CLIENT_ID",
+             "SYMPHONY_GITHUB_INSTALLATION_ID",
+             "SYMPHONY_GITHUB_APP_PRIVATE_KEY_PATH"
            ]
 
     assert [%{"name" => "github_api"}] = binding.tool_specs

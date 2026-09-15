@@ -311,6 +311,7 @@ defmodule SymphonyElixir.CoreTest do
     assert {:ok, runtime_pid} =
              SymphonyElixir.AgentRuntimeSupervisor.start_link(
                name: runtime_supervisor_name,
+               credentials_cache_name: nil,
                task_supervisor_name: task_supervisor_name,
                orchestrator_name: orchestrator_name
              )
@@ -407,6 +408,7 @@ defmodule SymphonyElixir.CoreTest do
     assert {:ok, runtime_supervisor_pid} =
              SymphonyElixir.AgentRuntimeSupervisor.start_link(
                name: runtime_supervisor_name,
+               credentials_cache_name: nil,
                task_supervisor_name: task_supervisor_name,
                orchestrator_name: orchestrator_name
              )

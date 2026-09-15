@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.GitHubProjects.Settings do
   @moduledoc false
 
+  alias SymphonyElixir.GitHub.Credentials
+
   @default_states %{
     "ready" => "Ready for agent",
     "working" => "Agent working",
@@ -14,14 +16,15 @@ defmodule SymphonyElixir.GitHubProjects.Settings do
     states = Map.get(provider, "states", @default_states)
     active = Map.get(tracker, :active_states, [])
     terminal = Map.get(tracker, :terminal_states, [])
-    token = resolve_token(Map.get(provider, "token", "$GITHUB_TOKEN"))
 
-    with :ok <- validate_scope(provider, token),
+    with :ok <- validate_scope(provider),
+         {:ok, credentials} <- credentials(provider),
          :ok <- validate_policy(provider, fields, states, active, terminal) do
       {:ok,
        %{
          endpoint: "https://api.github.com/graphql",
-         token: token,
+         token: credentials.token,
+         credential_reference: credentials.reference,
          organization: provider["organization"],
          project_number: provider["project_number"],
          repo: provider["repo"],
@@ -39,7 +42,7 @@ defmodule SymphonyElixir.GitHubProjects.Settings do
 
   def parse(_tracker), do: {:error, :invalid_github_projects_provider}
 
-  defp validate_scope(provider, token) do
+  defp validate_scope(provider) do
     cond do
       not valid_name?(provider["organization"]) ->
         {:error, :invalid_github_projects_organization}
@@ -49,9 +52,6 @@ defmodule SymphonyElixir.GitHubProjects.Settings do
 
       not valid_repo?(provider["repo"], provider["organization"]) ->
         {:error, :invalid_github_projects_repo}
-
-      not present?(token) ->
-        {:error, :missing_github_projects_token}
 
       true ->
         :ok
@@ -90,7 +90,21 @@ defmodule SymphonyElixir.GitHubProjects.Settings do
         _ -> []
       end
 
-    Enum.uniq(["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_ENTERPRISE_TOKEN" | reference])
+    Enum.uniq(
+      ["GITHUB_TOKEN", "GH_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_ENTERPRISE_TOKEN" | reference] ++
+        Credentials.secret_environment_names(provider)
+    )
+  end
+
+  defp credentials(%{"github_app" => _} = provider) do
+    with {:ok, reference} <- Credentials.reference(provider, :projects_read) do
+      {:ok, %{token: nil, reference: reference}}
+    end
+  end
+
+  defp credentials(provider) do
+    token = resolve_token(Map.get(provider, "token", "$GITHUB_TOKEN"))
+    if present?(token), do: {:ok, %{token: token, reference: nil}}, else: {:error, :missing_github_projects_token}
   end
 
   defp resolve_token("$" <> name) do

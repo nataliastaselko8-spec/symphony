@@ -29,6 +29,9 @@ defmodule SymphonyElixir.GitHub.Adapter do
     end
   end
 
+  @spec bind_settings(map()) :: {:ok, map()} | {:error, term()}
+  def bind_settings(tracker_settings), do: Client.bind_settings(tracker_settings)
+
   @spec fetch_issues_by_states([String.t()]) :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_issues_by_states(states), do: client_module().fetch_issues_by_states(states)
 

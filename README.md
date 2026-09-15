@@ -11,7 +11,8 @@ _In this [demo video](https://player.vimeo.com/video/1186371009?h=5626e4b899), S
 > Symphony is a low-key engineering preview for testing in trusted environments.
 
 This fork also provides [read-only GitHub Projects inspection](elixir/docs/github_projects.md).
-Projects-based agent execution is not enabled yet.
+It supports [controller-owned GitHub App credentials](elixir/docs/github_app_credentials.md)
+with automatic token renewal. Projects-based agent execution is not enabled yet.
 
 ## Running Symphony
 

@@ -17,12 +17,13 @@ Use [the inspection example](examples/github_projects.WORKFLOW.md) as a template
 organization, Project number and allowed repository to your own values. The example names
 and item ID are placeholders, not a live configuration.
 
-The controller reads an already issued GitHub App installation token from `GITHUB_TOKEN`
-(or the environment variable explicitly named by `provider.token`). Request read-only
-organization Projects and repository access for inspection, scoped to the intended
-installation/repository. App registration and token refresh are separate setup steps;
-automatic installation-token renewal is not implemented here. Keep the token outside the
-workflow file and repository.
+The controller can [authenticate with a GitHub App and renew installation tokens](github_app_credentials.md).
+The inspection profile requests read-only organization Projects and repository permissions,
+scoped explicitly to the configured installation/repository. Store the App private key outside
+the checkout and workspaces. The complete example uses `provider.github_app`; it needs no
+pre-issued token. Existing `provider.token` / `GITHUB_TOKEN` configurations remain supported
+when `github_app` is absent. Setting both authentication modes is an error, and App failures
+never fall back to another credential.
 
 `--dry-run` does not require the unattended-execution acknowledgement. Do not combine it
 with `--port` or `--logs-root`. It writes a JSON report and exits zero only after a complete
@@ -41,7 +42,8 @@ Settings belong under `tracker.provider`; `active_states`, `terminal_states` and
 | `organization` | Required organization login owning the Project. |
 | `project_number` | Required positive Project number within that organization. |
 | `repo` | Required allowed repository in `owner/name` form. |
-| `token` | Installation token or `$ENV_NAME`; default environment variable is `GITHUB_TOKEN`. |
+| `github_app` | App identity and controller key path; see [credential configuration](github_app_credentials.md). Mutually exclusive with `token`. |
+| `token` | Externally managed token or `$ENV_NAME`; default is `GITHUB_TOKEN` when `github_app` is absent. |
 | `item_ids` | Optional exact Project item node IDs. Omit to inspect the configured Project/repository scope. Use the selected item's real ID for a pilot. |
 | `fields.status` | Status field name; default `Status`. |
 | `fields.agent_allowed` | Permission field name; default `Agent allowed`. |

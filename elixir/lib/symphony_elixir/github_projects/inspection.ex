@@ -4,6 +4,7 @@ defmodule SymphonyElixir.GitHubProjects.Inspection do
   """
 
   alias SymphonyElixir.{Config, Config.Schema, Workflow}
+  alias SymphonyElixir.GitHub.Credentials.Cache
   alias SymphonyElixir.GitHubProjects.Client
 
   @spec run(Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -13,8 +14,7 @@ defmodule SymphonyElixir.GitHubProjects.Inspection do
          {:ok, settings} <- parse_settings(workflow.config),
          :ok <- Config.validate_settings(settings),
          :ok <- start_http(opts) do
-      inspect_project = Keyword.get(opts, :inspect_project, &Client.inspect/2)
-      inspect_project.(settings.tracker, Keyword.drop(opts, [:inspect_project, :ensure_http_started]))
+      inspect_with_credentials(settings.tracker, opts)
     end
   end
 
@@ -53,6 +53,39 @@ defmodule SymphonyElixir.GitHubProjects.Inspection do
       {:ok, settings} -> {:ok, settings}
       {:error, _} -> {:error, :invalid_workflow_config}
     end
+  end
+
+  defp inspect_with_credentials(tracker, opts) do
+    if Map.has_key?(tracker.provider, "github_app") do
+      cache_opts = opts |> Keyword.get(:credentials_cache_options, []) |> Keyword.put(:name, nil)
+
+      start_cache = Keyword.get(opts, :start_credentials_cache, &Cache.start_link/1)
+
+      case start_cache.(cache_opts) do
+        {:ok, cache} -> inspect_with_cache(tracker, opts, cache)
+        {:error, _reason} -> {:error, :github_credentials_unavailable}
+      end
+    else
+      inspect_project(tracker, opts)
+    end
+  end
+
+  defp inspect_with_cache(tracker, opts, cache) do
+    inspect_project(tracker, Keyword.put(opts, :credentials_cache, cache))
+  after
+    stop_cache(cache)
+  end
+
+  defp stop_cache(cache) do
+    GenServer.stop(cache, :normal)
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp inspect_project(tracker, opts) do
+    inspect_project = Keyword.get(opts, :inspect_project, &Client.inspect/2)
+    client_opts = Keyword.drop(opts, [:inspect_project, :ensure_http_started, :credentials_cache_options, :start_credentials_cache])
+    inspect_project.(tracker, client_opts)
   end
 
   defp start_http(opts) do
