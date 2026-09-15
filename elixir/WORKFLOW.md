@@ -1,4 +1,6 @@
 ---
+# Linear execution example. For Projects inspection use
+# docs/examples/github_projects.WORKFLOW.md with --dry-run.
 tracker:
   kind: linear
   provider:

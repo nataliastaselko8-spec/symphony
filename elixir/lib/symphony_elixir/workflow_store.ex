@@ -8,6 +8,7 @@ defmodule SymphonyElixir.WorkflowStore do
 
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.GitHubProjects.Inspection
   alias SymphonyElixir.Workflow
 
   @poll_interval_ms 1_000
@@ -157,6 +158,7 @@ defmodule SymphonyElixir.WorkflowStore do
   defp load_state(path) do
     with {:ok, workflow} <- Workflow.load(path),
          {:ok, settings} <- Schema.parse(workflow.config),
+         :ok <- Inspection.validate_runtime_settings(settings),
          :ok <- Config.validate_settings(settings),
          {:ok, stamp} <- current_stamp(path) do
       {:ok, %State{path: path, stamp: stamp, workflow: workflow, settings: settings}}

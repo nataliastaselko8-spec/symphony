@@ -10,6 +10,9 @@ _In this [demo video](https://player.vimeo.com/video/1186371009?h=5626e4b899), S
 > [!WARNING]
 > Symphony is a low-key engineering preview for testing in trusted environments.
 
+This fork also provides [read-only GitHub Projects inspection](elixir/docs/github_projects.md).
+Projects-based agent execution is not enabled yet.
+
 ## Running Symphony
 
 ### Requirements

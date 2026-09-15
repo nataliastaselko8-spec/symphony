@@ -3,6 +3,7 @@ defmodule SymphonyElixir.Workflow do
   Loads workflow configuration and prompt from WORKFLOW.md.
   """
 
+  alias SymphonyElixir.GitHubProjects.Inspection
   alias SymphonyElixir.WorkflowStore
 
   @workflow_file_name "WORKFLOW.md"
@@ -13,18 +14,24 @@ defmodule SymphonyElixir.Workflow do
       Path.join(File.cwd!(), @workflow_file_name)
   end
 
-  @spec set_workflow_file_path(Path.t()) :: :ok
+  @spec set_workflow_file_path(Path.t()) :: :ok | {:error, :github_projects_execution_disabled}
   def set_workflow_file_path(path) when is_binary(path) do
-    Application.put_env(:symphony_elixir, :workflow_file_path, path)
-    maybe_reload_store()
-    :ok
+    with :ok <- Inspection.validate_runtime_workflow(path) do
+      Application.put_env(:symphony_elixir, :workflow_file_path, path)
+      maybe_reload_store()
+      :ok
+    end
   end
 
-  @spec clear_workflow_file_path() :: :ok
+  @spec clear_workflow_file_path() :: :ok | {:error, :github_projects_execution_disabled}
   def clear_workflow_file_path do
-    Application.delete_env(:symphony_elixir, :workflow_file_path)
-    maybe_reload_store()
-    :ok
+    path = Path.join(File.cwd!(), @workflow_file_name)
+
+    with :ok <- Inspection.validate_runtime_workflow(path) do
+      Application.delete_env(:symphony_elixir, :workflow_file_path)
+      maybe_reload_store()
+      :ok
+    end
   end
 
   @type loaded_workflow :: %{

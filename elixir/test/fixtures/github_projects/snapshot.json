@@ -1,0 +1,147 @@
+{
+  "identity": {
+    "organization": {
+      "projectV2": {
+        "id": "PVT_fixture",
+        "number": 1,
+        "title": "Fixture delivery",
+        "url": "https://github.com/orgs/ExampleOrg/projects/1",
+        "owner": {
+          "login": "ExampleOrg"
+        }
+      }
+    },
+    "repository": {
+      "id": "R_fixture",
+      "nameWithOwner": "ExampleOrg/app"
+    }
+  },
+  "fields": [
+    {
+      "__typename": "ProjectV2SingleSelectField",
+      "id": "F_status",
+      "name": "Status",
+      "dataType": "SINGLE_SELECT",
+      "options": [
+        {
+          "id": "S_0",
+          "name": "Backlog"
+        },
+        {
+          "id": "S_1",
+          "name": "Ready for agent"
+        },
+        {
+          "id": "S_2",
+          "name": "Agent working"
+        },
+        {
+          "id": "S_3",
+          "name": "Needs human decision"
+        },
+        {
+          "id": "S_4",
+          "name": "PR ready"
+        },
+        {
+          "id": "S_5",
+          "name": "Done"
+        }
+      ]
+    },
+    {
+      "__typename": "ProjectV2SingleSelectField",
+      "id": "F_allowed",
+      "name": "Agent allowed",
+      "dataType": "SINGLE_SELECT",
+      "options": [
+        {
+          "id": "A_yes",
+          "name": "yes"
+        },
+        {
+          "id": "A_no",
+          "name": "no"
+        }
+      ]
+    },
+    {
+      "__typename": "ProjectV2Field",
+      "id": "F_acceptance",
+      "name": "Acceptance command",
+      "dataType": "TEXT"
+    }
+  ],
+  "items": [
+    {
+      "id": "PVTI_fixture_A",
+      "type": "ISSUE",
+      "isArchived": false,
+      "project": {
+        "id": "PVT_fixture"
+      },
+      "field_0": {
+        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+        "field": {
+          "id": "F_status"
+        },
+        "optionId": "S_1",
+        "name": "Ready for agent"
+      },
+      "field_1": {
+        "__typename": "ProjectV2ItemFieldSingleSelectValue",
+        "field": {
+          "id": "F_allowed"
+        },
+        "optionId": "A_yes",
+        "name": "yes"
+      },
+      "field_2": {
+        "__typename": "ProjectV2ItemFieldTextValue",
+        "field": {
+          "id": "F_acceptance"
+        },
+        "text": "printf 'data only; not executed'"
+      },
+      "content": {
+        "__typename": "Issue",
+        "id": "I_fixture_17",
+        "number": 17,
+        "title": "Synthetic issue",
+        "body": "Private fixture issue body, intentionally excluded from inspection output.",
+        "url": "https://github.com/ExampleOrg/app/issues/17",
+        "state": "OPEN",
+        "createdAt": "2026-09-15T09:00:00Z",
+        "updatedAt": "2026-09-15T10:00:00Z",
+        "repository": {
+          "nameWithOwner": "ExampleOrg/app"
+        },
+        "labels": {
+          "nodes": [
+            {
+              "name": " Feature "
+            },
+            {
+              "name": "FEATURE"
+            }
+          ],
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          }
+        },
+        "assignees": {
+          "nodes": [
+            {
+              "login": "fixture-owner"
+            }
+          ],
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          }
+        }
+      }
+    }
+  ]
+}
