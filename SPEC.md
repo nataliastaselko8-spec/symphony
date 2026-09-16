@@ -1264,6 +1264,15 @@ MUST reject the inspection-only kind, and workflow reload MUST retain the previo
 configuration when a change to that kind is rejected. The Elixir implementation documents this
 staged extension for `github_projects` in `elixir/docs/github_projects.md`.
 
+An implementation MAY prepare durable delivery-cycle storage before connecting execution.
+Such storage MUST retain repository ownership and budgets through handoff and restart. A missing,
+damaged, incompatible or unverified snapshot MUST NOT imply an idle repository. Commands MUST
+be version-checked and persisted before acknowledgment; duplicate commands MUST NOT repeat
+side effects. Backup restoration MUST NOT replenish uncertain budgets. Explicit cancellation
+MUST preserve work and require stopped execution and verified environment readiness before
+releasing ownership. The Elixir foundation and its deferred runtime/authentication integrations
+are described in `elixir/docs/delivery_cycle.md`.
+
 When an implementation supports GitHub App authentication, bound sessions MUST retain an
 immutable App/installation and repository/Project scope while resolving current credentials
 for each request. Installation tokens MUST be treated as opaque strings, scoped explicitly,

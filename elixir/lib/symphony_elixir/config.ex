@@ -3,8 +3,9 @@ defmodule SymphonyElixir.Config do
   Runtime configuration loaded from `WORKFLOW.md`.
   """
 
-  alias SymphonyElixir.{Config.Schema, Tracker}
-  alias SymphonyElixir.{Workflow, WorkflowStore}
+  alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.DeliveryGate.Settings, as: DeliverySettings
+  alias SymphonyElixir.{Tracker, Workflow, WorkflowStore}
 
   @default_prompt_template """
   You are working on an issue from the configured tracker.
@@ -30,6 +31,9 @@ defmodule SymphonyElixir.Config do
   def settings do
     WorkflowStore.settings()
   end
+
+  @spec delivery_settings(Schema.t()) :: {:ok, map()} | {:error, atom()}
+  def delivery_settings(settings), do: DeliverySettings.from_config(settings)
 
   @spec settings!() :: Schema.t()
   def settings! do
