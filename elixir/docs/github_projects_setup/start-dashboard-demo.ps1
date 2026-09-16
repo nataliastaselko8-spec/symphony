@@ -40,7 +40,7 @@ with (root / 'server.log').open('ab') as log:
         '/home/nataselko/.local/bin/mise', 'exec', '--', './bin/symphony',
         '--i-understand-that-this-will-be-running-without-the-usual-guardrails',
         '--logs-root', str(root / 'logs'), str(workflow)
-    ], cwd='/mnt/d/fork/_symphony/symphony/elixir', stdin=subprocess.DEVNULL,
+    ], cwd='/mnt/d/symphony/elixir', stdin=subprocess.DEVNULL,
        stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
 (root / 'server.pid').write_text(str(process.pid))
 for attempt in range(30):
