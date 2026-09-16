@@ -44,6 +44,10 @@ defmodule SymphonyElixir.GitHubCredentialsTest do
     refute Map.has_key?(push.permissions, "organization_projects")
     refute Map.has_key?(push.permissions, "issues")
     refute Map.has_key?(push.permissions, "pull_requests")
+    {:ok, delivery} = Credentials.reference(provider, :delivery_read)
+    assert delivery.permissions == %{"actions" => "read", "pull_requests" => "read", "contents" => "read", "metadata" => "read"}
+    refute delivery == reference
+    refute Map.has_key?(delivery.permissions, "organization_projects")
     assert Credentials.reference(Map.put(provider, "token", nil), :projects_read) == {:error, :mixed_github_credentials}
   end
 

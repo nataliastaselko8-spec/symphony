@@ -1273,6 +1273,16 @@ MUST preserve work and require stopped execution and verified environment readin
 releasing ownership. The Elixir foundation and its deferred runtime/authentication integrations
 are described in `elixir/docs/delivery_cycle.md`.
 
+A staged delivery observer MAY read pull requests, commits and deployment evidence without
+enabling execution. It MUST distinguish observation completeness, deployment success,
+environment readiness at the evidence timestamp and operator validation. Evidence MUST be
+bound to an approved immutable policy, repository, workflow, SHA, run and attempt; a producer
+success flag alone is insufficient. Partial histories, contradictory jobs and superseding
+attempts MUST NOT yield a positive admission decision. The observer MUST retain cancellation
+and recovery ownership and reject results for a changed cycle version or scope. Read-only
+observations MUST NOT reserve CI attempts, release ownership or imply manual validation.
+The Elixir contract and finite diagnostic are in `elixir/docs/github_projects_delivery.md`.
+
 When an implementation supports GitHub App authentication, bound sessions MUST retain an
 immutable App/installation and repository/Project scope while resolving current credentials
 for each request. Installation tokens MUST be treated as opaque strings, scoped explicitly,
