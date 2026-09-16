@@ -2,6 +2,8 @@
 # Linear execution example. For Projects inspection use
 # docs/examples/github_projects.WORKFLOW.md with --dry-run.
 # Controller App authentication and renewal: docs/github_app_credentials.md.
+# Optional delivery state contract for future Projects execution: docs/delivery_cycle.md.
+# It is not enabled by this Linear workflow or by adding delivery.state_path.
 tracker:
   kind: linear
   provider:

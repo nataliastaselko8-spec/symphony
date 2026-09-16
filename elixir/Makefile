@@ -1,4 +1,4 @@
-.PHONY: help all setup deps build fmt fmt-check lint test coverage ci dialyzer e2e
+.PHONY: help all setup deps build fmt fmt-check lint test coverage ci dialyzer e2e delivery-store-test
 
 MIX ?= mix
 
@@ -29,6 +29,9 @@ coverage:
 test:
 	$(MIX) test
 
+delivery-store-test:
+	python3 -I -B -m unittest discover -s test/python -p 'test_delivery_store.py'
+
 dialyzer:
 	$(MIX) deps.get
 	$(MIX) dialyzer --format short
@@ -42,6 +45,7 @@ ci:
 	$(MAKE) fmt-check
 	$(MAKE) lint
 	$(MAKE) coverage
+	$(MAKE) delivery-store-test
 	$(MAKE) dialyzer
 
 all: ci

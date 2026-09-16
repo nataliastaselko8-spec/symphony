@@ -45,6 +45,7 @@ defmodule SymphonyElixir.MixProject do
         ]
       ],
       test_ignore_filters: [
+        "test/support/delivery_gate_support.exs",
         "test/support/snapshot_support.exs",
         "test/support/test_support.exs"
       ],

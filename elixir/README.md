@@ -37,6 +37,11 @@ tracker issue can become a dispatch candidate again after restart.
 
 ## How to use it
 
+The GitHub Projects extension also includes a [durable delivery-cycle foundation](docs/delivery_cycle.md)
+for the future controller. It persists ownership, budgets, cancellation and recovery on Linux/WSL2
+using Python 3 from the standard system installation. It does not enable Projects execution or
+change the existing trackers' in-memory scheduling and cleanup behavior.
+
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).
 2. Get a new personal token in Linear via Settings → Security & access → Personal API keys, and
