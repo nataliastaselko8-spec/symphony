@@ -13,7 +13,9 @@ _In this [demo video](https://player.vimeo.com/video/1186371009?h=5626e4b899), S
 This fork also provides [read-only GitHub Projects inspection](elixir/docs/github_projects.md).
 It supports [controller-owned GitHub App credentials](elixir/docs/github_app_credentials.md)
 with automatic token renewal, and [delivery observations](elixir/docs/github_projects_delivery.md)
-that verify PRs, development runs and deployment evidence. Projects-based agent execution is not enabled yet.
+that verify PRs, development runs and deployment evidence. An internal
+[delivery runtime](elixir/docs/delivery_runtime.md) connects retained ownership and budgets
+to worker admission, cancellation and cleanup. Projects-based agent execution is not enabled yet.
 
 ## Running Symphony
 

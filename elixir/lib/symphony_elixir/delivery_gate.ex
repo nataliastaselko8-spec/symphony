@@ -32,6 +32,14 @@ defmodule SymphonyElixir.DeliveryGate do
   @spec admission(GenServer.server(), map(), String.t()) :: :ok | {:error, atom()}
   def admission(server, version, item), do: GenServer.call(server, {:admission, version, item})
 
+  @doc "Commit an interval before granting one registered, inert worker permission to activate."
+  @spec begin_work(GenServer.server(), map(), String.t(), String.t(), String.t(), pid()) :: {:ok, map()} | {:error, atom()}
+  def begin_work(server, version, item, interval, budget, pid),
+    do: GenServer.call(server, {:begin_work, version, item, interval, budget, pid}, 15_000)
+
+  @spec worker_check(GenServer.server(), reference(), :activate | :continue) :: :ok | {:error, atom()}
+  def worker_check(server, nonce, mode), do: GenServer.call(server, {:worker_check, nonce, mode})
+
   @spec restore_backup(GenServer.server(), map(), String.t(), String.t()) :: :ok | {:error, atom()}
   def restore_backup(server, version, actor, reason), do: GenServer.call(server, {:restore, version, actor, reason}, 15_000)
 
@@ -46,7 +54,8 @@ defmodule SymphonyElixir.DeliveryGate do
     case Store.open(settings.path) do
       {:ok, port} ->
         {snapshot, mode} = load(port, settings.scope)
-        {:ok, %{port: port, settings: settings, snapshot: snapshot, mode: mode, epoch: epoch(), verified_sha: nil}}
+        state = %{port: port, settings: settings, snapshot: snapshot, mode: mode, epoch: epoch()}
+        {:ok, Map.merge(state, %{verified_sha: nil, permit: nil})}
 
       {:error, reason} ->
         {:stop, reason}
@@ -62,20 +71,45 @@ defmodule SymphonyElixir.DeliveryGate do
   end
 
   def handle_call({:admission, version, item}, _from, state) do
-    reply =
-      with :ok <- current_version(state, version),
-           :ok <- reconciled(state),
-           :ok <- validated_base(state),
-           {:ok, persisted} <- Store.request(state.port, %{"op" => "read"}),
-           true <- persisted == state.snapshot do
-        State.admission(state.snapshot["state"], item)
-      else
-        false -> {:error, :store_changed}
-        {:error, _} = error -> error
-      end
+    reply = check_admission(state, version, item)
 
     next = if storage_error?(reply), do: unavailable(state), else: state
     {:reply, reply, next}
+  end
+
+  def handle_call({:begin_work, version, item, interval, budget, pid}, _from, state) do
+    args = %{"interval_id" => interval, "budget" => budget}
+
+    with true <- is_binary(interval) and is_pid(pid) and node(pid) == node() and Process.alive?(pid),
+         :ok <- check_admission(state, version, item),
+         {:ok, candidate, :new} <-
+           Snapshot.append(state.snapshot, "work-" <> interval, version.revision, "start_work", args, System.system_time(:millisecond)),
+         true <- candidate["state"]["cycle"]["phase"] == "working" do
+      case persist_command(state, candidate, :new) do
+        {:reply, {:ok, receipt}, next} ->
+          remaining = candidate["state"]["cycle"]["budget"]["interval"]["reserved_ms"]
+          nonce = make_ref()
+          deadline = System.monotonic_time(:millisecond) + remaining
+          permit = %{nonce: nonce, pid: pid, interval: interval, activated: false, deadline: deadline}
+          {:reply, {:ok, Map.merge(receipt, %{nonce: nonce, remaining_ms: remaining})}, %{next | permit: permit}}
+
+        failure ->
+          failure
+      end
+    else
+      {:error, reason} ->
+        next = if storage_error?({:error, reason}), do: unavailable(state), else: state
+        {:reply, {:error, reason}, next}
+
+      _ ->
+        {:reply, {:error, :work_start_rejected}, state}
+    end
+  end
+
+  def handle_call({:worker_check, nonce, mode}, {pid, _}, state) do
+    reply = check_worker(state, nonce, pid, mode)
+    next = if reply == :ok, do: put_in(state, [:permit, :activated], true), else: state
+    {:reply, reply, if(storage_error?(reply), do: unavailable(next), else: next)}
   end
 
   def handle_call({:reconcile, version, scope, sha}, _from, state) do
@@ -152,7 +186,7 @@ defmodule SymphonyElixir.DeliveryGate do
   defp command_allowed(state, action, args, _) do
     with :ok <- reconciled(state),
          :ok <- if(action == "start_work", do: validated_base(state), else: :ok) do
-      if action in ~w(bootstrap reserve merged deployment validate_dev complete finish_cancel assign_recovery finish_recovery resume) and
+      if action in ~w(bootstrap reserve merged deployment validate_dev complete finish_cancel assign_recovery finish_recovery resume review_resume) and
            args["sha"] != state.verified_sha do
         {:error, :observation_sha_changed}
       else
@@ -181,6 +215,46 @@ defmodule SymphonyElixir.DeliveryGate do
     if proposed == version(state), do: :ok, else: {:error, :stale_version}
   end
 
+  defp check_admission(state, version, item) do
+    with :ok <- current_version(state, version),
+         :ok <- reconciled(state),
+         :ok <- validated_base(state),
+         :ok <- no_live_permit(state.permit),
+         :ok <- store_matches(state) do
+      State.admission(state.snapshot["state"], item)
+    end
+  end
+
+  defp no_live_permit(nil), do: :ok
+  defp no_live_permit(%{pid: pid}), do: if(Process.alive?(pid), do: {:error, :worker_still_alive}, else: :ok)
+
+  defp store_matches(state) do
+    case Store.request(state.port, %{"op" => "read"}) do
+      {:ok, persisted} when persisted == state.snapshot -> :ok
+      {:ok, _} -> {:error, :store_changed}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp check_worker(%{permit: %{nonce: nonce, pid: pid} = permit} = state, nonce, pid, mode) do
+    cycle = state.snapshot["state"]["cycle"]
+    valid_mode = valid_permit_mode?(mode, permit.activated)
+
+    allowed =
+      state.mode not in [:store_unavailable, :recovery_required] and valid_mode and
+        cycle["phase"] == "working" and cycle["cancellation"] == nil and
+        get_in(cycle, ["budget", "interval", "id"]) == permit.interval and
+        System.monotonic_time(:millisecond) < permit.deadline
+
+    if allowed, do: store_matches(state), else: {:error, :worker_permit_revoked}
+  end
+
+  defp check_worker(_, _, _, _), do: {:error, :worker_permit_revoked}
+
+  defp valid_permit_mode?(:activate, activated), do: not activated
+  defp valid_permit_mode?(:continue, activated), do: activated
+  defp valid_permit_mode?(_, _), do: false
+
   defp same_epoch(state, %{epoch: epoch}) when epoch == state.epoch, do: :ok
   defp same_epoch(_, _), do: {:error, :stale_version}
 
@@ -202,7 +276,7 @@ defmodule SymphonyElixir.DeliveryGate do
 
   defp version(state), do: %{epoch: state.epoch, revision: if(state.snapshot, do: state.snapshot["revision"], else: nil)}
   defp epoch, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
-  defp unavailable(state), do: %{state | mode: :store_unavailable, verified_sha: nil}
+  defp unavailable(state), do: %{state | mode: :store_unavailable, verified_sha: nil, permit: nil}
   defp storage_error?({:error, reason}), do: reason in @storage_errors
   defp storage_error?(_), do: false
 

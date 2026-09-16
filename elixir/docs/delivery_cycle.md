@@ -2,8 +2,8 @@
 
 PR-06 добавляет `DeliveryGate`, хранилище и внутренний контракт controller.
 Исполнение `github_projects` по-прежнему запрещено проверками CLI, application
-startup и reload. Модуль не подключён к scheduler, HTTP API или инструментам
-worker и не выполняет сетевых запросов.
+startup и reload. PR-08 подключает модуль к внутреннему lifecycle scheduler;
+HTTP API и инструменты worker его напрямую не экспонируют. Сам Gate не делает сетевых запросов.
 
 GitHub observer относится к PR-07; запуск, остановка worker и измерение времени —
 к PR-08; публикация и разрешённые повторы — к PR-09; аутентификация оператора и
@@ -89,7 +89,8 @@ Snapshot содержит `schema_version: 1`, scope, revision, состояни
 ## Внутренний API
 
 `DeliveryGate.start_link(settings: options)` запускает только владельца состояния.
-Подключение к application supervisor и runtime reload произойдёт в PR-08.
+Подключение к supervisor и runtime reload реализовано в [PR-08](delivery_runtime.md).
+Обычный startup Projects остаётся закрытым.
 
 - `status/1` возвращает состояние, режим допуска и version `{epoch, revision}`.
 - `reconcile/4` принимает подтверждённый controller scope и текущий dev SHA для
@@ -101,8 +102,12 @@ Snapshot содержит `schema_version: 1`, scope, revision, состояни
 - `admission/3` проверяет version, сверку, базу, владельца, бюджет и соответствие
   файла памяти. Для явно назначенного recovery подходит текущая сломанная dev.
 - `check_settings/2` возвращает `restart_required` при другом пути или scope;
-  живое хранилище не переключается. Вызов из runtime reload относится к PR-08.
+  живое хранилище не переключается. PR-08 вызывает эту политику из runtime reload.
 - `restore_backup/4` выполняет явное восстановление с actor и причиной.
+- `begin_work/7` сохраняет рабочий интервал до выдачи одноразового допуска связанному PID;
+  `worker_check/3` проверяет активацию/продолжение. Nonce не восстанавливается из receipt.
+- `review_resume` возвращает текущий PR/head к работе по решению оператора с дополнительным
+  бюджетом; расходы, ветка и PR сохраняются. Детали и изменение scope описаны в PR-08.
 
 Новая instance получает новый epoch. Команды старой instance отклоняются. Повтор
 принятой команды с тем же ID, содержимым и исходной revision не списывает бюджет

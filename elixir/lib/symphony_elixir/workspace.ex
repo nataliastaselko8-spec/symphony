@@ -5,20 +5,22 @@ defmodule SymphonyElixir.Workspace do
 
   require Logger
   alias SymphonyElixir.{Config, PathSafety, SSH}
+  alias SymphonyElixir.DeliveryRuntime.Guard
 
   @remote_workspace_marker "__SYMPHONY_WORKSPACE__"
 
   @type worker_host :: String.t() | nil
 
-  @spec create_for_issue(map() | String.t() | nil, worker_host()) ::
+  @spec create_for_issue(map() | String.t() | nil, worker_host(), keyword()) ::
           {:ok, Path.t()} | {:error, term()}
-  def create_for_issue(issue_or_identifier, worker_host \\ nil) do
-    issue_context = issue_context(issue_or_identifier)
+  def create_for_issue(issue_or_identifier, worker_host \\ nil, opts \\ []) do
+    issue_context = Map.put(issue_context(issue_or_identifier), :delivery, Keyword.get(opts, :delivery))
 
     try do
       safe_id = workspace_key(issue_or_identifier)
 
-      with {:ok, workspace} <- workspace_path_for_issue(safe_id, worker_host),
+      with :ok <- Guard.check(issue_context.delivery, :effect),
+           {:ok, workspace} <- workspace_path_for_issue(safe_id, worker_host),
            :ok <- validate_workspace_path(workspace, worker_host),
            {:ok, workspace, created?} <- ensure_workspace(workspace, worker_host) do
         case maybe_run_after_create_hook(workspace, issue_context, created?, worker_host) do
@@ -43,8 +45,10 @@ defmodule SymphonyElixir.Workspace do
         {:ok, workspace, false}
 
       File.exists?(workspace) ->
-        File.rm_rf!(workspace)
-        create_workspace(workspace)
+        with :ok <- Guard.cleanup(workspace) do
+          File.rm_rf!(workspace)
+          create_workspace(workspace)
+        end
 
       true ->
         create_workspace(workspace)
@@ -59,7 +63,7 @@ defmodule SymphonyElixir.Workspace do
         "if [ -d \"$workspace\" ]; then",
         "  created=0",
         "elif [ -e \"$workspace\" ]; then",
-        "  rm -rf \"$workspace\"",
+        if(Guard.projects?(), do: "  exit 73", else: "  rm -rf \"$workspace\""),
         "  mkdir -p \"$workspace\"",
         "  created=1",
         "else",
@@ -85,7 +89,7 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp create_workspace(workspace) do
-    File.rm_rf!(workspace)
+    if not Guard.projects?(), do: File.rm_rf!(workspace)
     File.mkdir_p!(workspace)
     {:ok, workspace, true}
   end
@@ -106,29 +110,33 @@ defmodule SymphonyElixir.Workspace do
         end
 
       false ->
-        File.rm_rf(workspace)
+        remove_local_workspace(workspace)
     end
   end
 
   def remove(workspace, worker_host) when is_binary(worker_host) do
-    maybe_run_before_remove_hook(workspace, worker_host)
+    with :ok <- Guard.cleanup(workspace), :ok <- validate_workspace_path(workspace, worker_host) do
+      maybe_run_before_remove_hook(workspace, worker_host)
 
-    script =
-      [
-        remote_shell_assign("workspace", workspace),
-        "rm -rf \"$workspace\""
-      ]
-      |> Enum.join("\n")
+      script =
+        [
+          remote_shell_assign("workspace", workspace),
+          "rm -rf \"$workspace\""
+        ]
+        |> Enum.join("\n")
 
-    case run_remote_command(worker_host, script, Config.settings!().hooks.timeout_ms) do
-      {:ok, {_output, 0}} ->
-        {:ok, []}
+      case run_remote_command(worker_host, script, Config.settings!().hooks.timeout_ms) do
+        {:ok, {_output, 0}} ->
+          {:ok, []}
 
-      {:ok, {output, status}} ->
-        {:error, {:workspace_remove_failed, worker_host, status, output}, ""}
+        {:ok, {output, status}} ->
+          {:error, {:workspace_remove_failed, worker_host, status, output}, ""}
 
-      {:error, reason} ->
-        {:error, reason, ""}
+        {:error, reason} ->
+          {:error, reason, ""}
+      end
+    else
+      {:error, reason} -> {:error, reason, ""}
     end
   end
 
@@ -157,8 +165,14 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp remove_local_workspace(workspace) do
-    maybe_run_before_remove_hook(workspace, nil)
-    File.rm_rf(workspace)
+    case Guard.cleanup(workspace) do
+      :ok ->
+        maybe_run_before_remove_hook(workspace, nil)
+        File.rm_rf(workspace)
+
+      {:error, reason} ->
+        {:error, reason, ""}
+    end
   end
 
   @spec remove_issue_workspaces(term()) :: :ok
@@ -216,10 +230,10 @@ defmodule SymphonyElixir.Workspace do
 
   def remove_issue_workspaces(_identifier, _worker_host), do: :ok
 
-  @spec run_before_run_hook(Path.t(), map() | String.t() | nil, worker_host()) ::
+  @spec run_before_run_hook(Path.t(), map() | String.t() | nil, worker_host(), keyword()) ::
           :ok | {:error, term()}
-  def run_before_run_hook(workspace, issue_or_identifier, worker_host \\ nil) when is_binary(workspace) do
-    issue_context = issue_context(issue_or_identifier)
+  def run_before_run_hook(workspace, issue_or_identifier, worker_host \\ nil, opts \\ []) when is_binary(workspace) do
+    issue_context = Map.put(issue_context(issue_or_identifier), :delivery, Keyword.get(opts, :delivery))
     hooks = Config.settings!().hooks
 
     case hooks.before_run do
@@ -231,9 +245,9 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  @spec run_after_run_hook(Path.t(), map() | String.t() | nil, worker_host()) :: :ok
-  def run_after_run_hook(workspace, issue_or_identifier, worker_host \\ nil) when is_binary(workspace) do
-    issue_context = issue_context(issue_or_identifier)
+  @spec run_after_run_hook(Path.t(), map() | String.t() | nil, worker_host(), keyword()) :: :ok
+  def run_after_run_hook(workspace, issue_or_identifier, worker_host \\ nil, opts \\ []) when is_binary(workspace) do
+    issue_context = Map.put(issue_context(issue_or_identifier), :delivery, Keyword.get(opts, :delivery))
     hooks = Config.settings!().hooks
 
     case hooks.after_run do
@@ -307,24 +321,28 @@ defmodule SymphonyElixir.Workspace do
   defp cleanup_failed_new_workspace(_workspace, false, _worker_host), do: :ok
 
   defp cleanup_failed_new_workspace(workspace, true, nil) do
-    case File.rm_rf(workspace) do
-      {:ok, _removed} ->
-        :ok
+    if Guard.cleanup(workspace) == :ok do
+      case File.rm_rf(workspace) do
+        {:ok, _removed} ->
+          :ok
 
-      {:error, reason, path} ->
-        Logger.warning("Failed to remove partial workspace path=#{path} reason=#{inspect(reason)}")
+        {:error, reason, path} ->
+          Logger.warning("Failed to remove partial workspace path=#{path} reason=#{inspect(reason)}")
+      end
     end
   end
 
   defp cleanup_failed_new_workspace(workspace, true, worker_host) when is_binary(worker_host) do
-    script = [remote_shell_assign("workspace", workspace), "rm -rf \"$workspace\""] |> Enum.join("\n")
+    if Guard.cleanup(workspace) == :ok do
+      script = [remote_shell_assign("workspace", workspace), "rm -rf \"$workspace\""] |> Enum.join("\n")
 
-    case run_remote_command(worker_host, script, Config.settings!().hooks.timeout_ms) do
-      {:ok, {_output, 0}} ->
-        :ok
+      case run_remote_command(worker_host, script, Config.settings!().hooks.timeout_ms) do
+        {:ok, {_output, 0}} ->
+          :ok
 
-      result ->
-        Logger.warning("Failed to remove partial workspace worker_host=#{worker_host_for_log(worker_host)} result=#{inspect(result)}")
+        result ->
+          Logger.warning("Failed to remove partial workspace worker_host=#{worker_host_for_log(worker_host)} result=#{inspect(result)}")
+      end
     end
   end
 
@@ -394,7 +412,15 @@ defmodule SymphonyElixir.Workspace do
   defp ignore_hook_failure(:ok), do: :ok
   defp ignore_hook_failure({:error, _reason}), do: :ok
 
-  defp run_hook(command, workspace, issue_context, hook_name, nil) do
+  defp run_hook(command, workspace, issue_context, hook_name, worker_host) do
+    delivery = Map.get(issue_context, :delivery)
+
+    with :ok <- Guard.check(delivery, :effect), {:ok, command} <- Guard.command(command, delivery) do
+      execute_hook(command, workspace, issue_context, hook_name, worker_host)
+    end
+  end
+
+  defp execute_hook(command, workspace, issue_context, hook_name, nil) do
     timeout_ms = Config.settings!().hooks.timeout_ms
 
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local")
@@ -417,7 +443,7 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  defp run_hook(command, workspace, issue_context, hook_name, worker_host) when is_binary(worker_host) do
+  defp execute_hook(command, workspace, issue_context, hook_name, worker_host) when is_binary(worker_host) do
     timeout_ms = Config.settings!().hooks.timeout_ms
 
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=#{worker_host}")
@@ -477,7 +503,8 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp validate_recorded_workspace_path(workspace) when is_binary(workspace) do
-    validate_local_workspace_path(workspace, Path.dirname(workspace))
+    root = if Guard.projects?(), do: Config.local_workspace_root(), else: Path.dirname(workspace)
+    validate_local_workspace_path(workspace, root)
   end
 
   defp validate_local_workspace_path(workspace, workspace_root)

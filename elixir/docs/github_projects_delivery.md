@@ -77,8 +77,9 @@ wsl -d Ubuntu -u nataselko --cd /mnt/d/symphony/elixir --exec bash -lc 'mise exe
 
 Настройки observer входят в restart-only fingerprint PR-06. Добавление секции меняет
 scope существующего store; старое состояние не сбрасывается и не мигрирует автоматически.
-Отсутствие секции сохраняет прежний fingerprint PR-06. В PR-08 необходим явный порядок
-подключения store с согласованным scope; inspection этому не мешает, поскольку store не читает.
+В PR-07 отсутствие секции сохраняло fingerprint PR-06. PR-08 дополнительно версионирует
+runtime-контракт и фильтры: [правила подключения и несовместимого store](delivery_runtime.md).
+Inspection этому не мешает, поскольку store не читает.
 
 ## Как проверяются факты
 

@@ -284,6 +284,13 @@ Configure `delivery.observer.contract_commit` and `contract_sha256` in that prof
 Exit codes are 0 (full observation, manual validation pending), 1 (incomplete/error), and
 2 (additional confirmed blocker). None authorizes worker execution or changes the delivery store.
 
+The internal [delivery runtime contract](docs/delivery_runtime.md) now connects the gate and
+observer to scheduler, worker, hooks and cleanup. One repository owner survives worker exit,
+CI/review/deployment waits, cancellation and restart. It uses single-use process-bound permits
+and monotonic active-time accounting. Production Projects startup remains disabled: publishing,
+authenticated operator controls and verified SSH/Podman process shutdown require later stages.
+Existing delivery stores have a changed scope fingerprint; there is no automatic migration.
+
 ### Jira Cloud adapter
 
 - Config: use `tracker.kind: jira` with provider `base_url`, `email`, `api_token`, and required

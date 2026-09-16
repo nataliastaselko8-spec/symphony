@@ -1283,6 +1283,17 @@ and recovery ownership and reject results for a changed cycle version or scope. 
 observations MUST NOT reserve CI attempts, release ownership or imply manual validation.
 The Elixir contract and finite diagnostic are in `elixir/docs/github_projects_delivery.md`.
 
+A staged delivery runtime MUST reserve ownership and time before worker effects, bind a
+single-use activation permit to one worker process, and recheck permission before hooks and
+turns. Observer results MUST NOT outlive their scope/version or freshness deadline. Retrying
+or replacing a process MUST NOT release its repository owner or reset budgets. Controller
+loss MUST revoke worker permission; unconfirmed external process shutdown MUST retain the
+interval and block replacement and cleanup. A stale permit MUST NOT affect a successor.
+Waiting for CI, review, deployment or operator validation MUST NOT require an active worker.
+Scope-changing, invalid or missing configuration MUST stop admission; restoring a file alone
+MUST NOT clear a restart requirement. The internal implementation and its disabled rollout
+boundary are documented in `elixir/docs/delivery_runtime.md`.
+
 When an implementation supports GitHub App authentication, bound sessions MUST retain an
 immutable App/installation and repository/Project scope while resolving current credentials
 for each request. Installation tokens MUST be treated as opaque strings, scoped explicitly,

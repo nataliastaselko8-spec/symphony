@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, DeliveryRuntime, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Tracker.Issue
 
   @continuation_retry_delay_ms 1_000
@@ -33,6 +33,7 @@ defmodule SymphonyElixir.Orchestrator do
       :poll_check_in_progress,
       :tick_timer_ref,
       :tick_token,
+      :delivery_runtime,
       task_supervisor: SymphonyElixir.TaskSupervisor,
       running: %{},
       completed: MapSet.new(),
@@ -64,12 +65,13 @@ defmodule SymphonyElixir.Orchestrator do
           poll_check_in_progress: false,
           tick_timer_ref: nil,
           tick_token: nil,
+          delivery_runtime: Keyword.get(opts, :delivery_runtime),
           task_supervisor: Keyword.get(opts, :task_supervisor, SymphonyElixir.TaskSupervisor),
           codex_totals: @empty_codex_totals,
           codex_rate_limits: nil
         }
 
-        run_terminal_workspace_cleanup()
+        if state.delivery_runtime == nil, do: run_terminal_workspace_cleanup()
         state = schedule_tick(state, 0)
 
         {:ok, state}
@@ -138,7 +140,13 @@ defmodule SymphonyElixir.Orchestrator do
         state = record_session_completion_totals(state, running_entry)
         session_id = running_entry_session_id(running_entry)
 
-        state = handle_agent_down(reason, state, issue_id, running_entry, session_id)
+        state =
+          if state.delivery_runtime do
+            DeliveryRuntime.refresh(state.delivery_runtime)
+            release_issue_claim(state, issue_id)
+          else
+            handle_agent_down(reason, state, issue_id, running_entry, session_id)
+          end
 
         Logger.info("Agent task finished for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}")
 
@@ -251,6 +259,15 @@ defmodule SymphonyElixir.Orchestrator do
       worker_host: Map.get(running_entry, :worker_host),
       workspace_path: Map.get(running_entry, :workspace_path)
     })
+  end
+
+  defp maybe_dispatch(%State{delivery_runtime: runtime} = state) when not is_nil(runtime) do
+    DeliveryRuntime.refresh(runtime)
+
+    case Tracker.fetch_issues_by_states(Config.settings!().tracker.active_states) do
+      {:ok, issues} -> choose_issues(issues, state)
+      _ -> state
+    end
   end
 
   defp maybe_dispatch(%State{} = state) do
@@ -951,9 +968,18 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host) do
-    case Task.Supervisor.start_child(state.task_supervisor, fn ->
-           AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host)
-         end) do
+    start =
+      if state.delivery_runtime do
+        DeliveryRuntime.dispatch(state.delivery_runtime, issue, worker_host, fn handle ->
+          AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host, delivery: handle)
+        end)
+      else
+        Task.Supervisor.start_child(state.task_supervisor, fn ->
+          AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host)
+        end)
+      end
+
+    case start do
       {:ok, pid} ->
         ref = Process.monitor(pid)
 
@@ -991,16 +1017,22 @@ defmodule SymphonyElixir.Orchestrator do
         }
 
       {:error, reason} ->
-        Logger.error("Unable to spawn agent for #{issue_context(issue)}: #{inspect(reason)}")
-        next_attempt = if is_integer(attempt), do: attempt + 1, else: nil
-
-        schedule_issue_retry(state, issue.id, next_attempt, %{
-          identifier: issue.identifier,
-          issue_url: issue.url,
-          error: "failed to spawn agent: #{inspect(reason)}",
-          worker_host: worker_host
-        })
+        handle_spawn_failure(state, issue, attempt, worker_host, reason)
     end
+  end
+
+  defp handle_spawn_failure(%{delivery_runtime: runtime} = state, _, _, _, _) when not is_nil(runtime), do: state
+
+  defp handle_spawn_failure(state, issue, attempt, worker_host, reason) do
+    Logger.error("Unable to spawn agent for #{issue_context(issue)}: #{inspect(reason)}")
+    next_attempt = if is_integer(attempt), do: attempt + 1, else: nil
+
+    schedule_issue_retry(state, issue.id, next_attempt, %{
+      identifier: issue.identifier,
+      issue_url: issue.url,
+      error: "failed to spawn agent: #{inspect(reason)}",
+      worker_host: worker_host
+    })
   end
 
   defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states)
@@ -1091,22 +1123,27 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_retry_issue(%State{} = state, issue_id, attempt, metadata) do
-    case Tracker.fetch_issues_by_ids([issue_id]) do
-      {:ok, issues} ->
-        issues
-        |> find_issue_by_id(issue_id)
-        |> handle_retry_issue_lookup(state, issue_id, attempt, metadata)
+    if state.delivery_runtime do
+      DeliveryRuntime.refresh(state.delivery_runtime)
+      {:noreply, release_issue_claim(state, issue_id)}
+    else
+      case Tracker.fetch_issues_by_ids([issue_id]) do
+        {:ok, issues} ->
+          issues
+          |> find_issue_by_id(issue_id)
+          |> handle_retry_issue_lookup(state, issue_id, attempt, metadata)
 
-      {:error, reason} ->
-        Logger.warning("Retry poll failed for issue_id=#{issue_id} issue_identifier=#{metadata[:identifier] || issue_id}: #{inspect(reason)}")
+        {:error, reason} ->
+          Logger.warning("Retry poll failed for issue_id=#{issue_id} issue_identifier=#{metadata[:identifier] || issue_id}: #{inspect(reason)}")
 
-        {:noreply,
-         schedule_issue_retry(
-           state,
-           issue_id,
-           attempt + 1,
-           Map.merge(metadata, %{error: "retry poll failed: #{inspect(reason)}"})
-         )}
+          {:noreply,
+           schedule_issue_retry(
+             state,
+             issue_id,
+             attempt + 1,
+             Map.merge(metadata, %{error: "retry poll failed: #{inspect(reason)}"})
+           )}
+      end
     end
   end
 
@@ -1481,7 +1518,8 @@ defmodule SymphonyElixir.Orchestrator do
          next_poll_in_ms: next_poll_in_ms(state.next_poll_due_at_ms, now_ms),
          poll_interval_ms: state.poll_interval_ms
        }
-     }, state}
+     }
+     |> delivery_snapshot(state.delivery_runtime), state}
   end
 
   def handle_call(:request_refresh, _from, state) do
@@ -1987,4 +2025,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp integer_like(_value), do: nil
+
+  defp delivery_snapshot(snapshot, nil), do: snapshot
+
+  defp delivery_snapshot(snapshot, runtime) do
+    Map.put(snapshot, :delivery, DeliveryRuntime.status(runtime))
+  catch
+    :exit, _ -> Map.put(snapshot, :delivery, %{reason: :delivery_runtime_unavailable, execution_enabled: false})
+  end
 end

@@ -19,6 +19,23 @@ defmodule SymphonyElixir.GitHubProjects.Delivery do
     end
   end
 
+  @doc "Check unchanged remote pointers for one existing interval; never grants new admission."
+  @spec watch(Config.Schema.t(), map(), String.t(), keyword()) :: :ok | {:error, term()}
+  def watch(config, context, expected, opts \\ []) do
+    with {:ok, settings} <- Config.delivery_observer_settings(config),
+         client = Client.new(settings, Keyword.put(opts, :deadline_ms, 30_000)),
+         {:ok, repo} <- repository(client),
+         {:ok, pointers} <- pointers(client, context, repo),
+         true <- watch_digest(pointers) == expected do
+      :ok
+    else
+      {:error, {:github_delivery_limited, _}} = limited -> limited
+      _ -> {:error, :remote_conditions_changed}
+    end
+  rescue
+    _ -> {:error, :remote_conditions_unavailable}
+  end
+
   defp safely_observe(client, context) do
     case gather(client, context) do
       {:ok, facts, reasons} -> Observation.new(client.settings, context, facts, reasons)
@@ -51,7 +68,8 @@ defmodule SymphonyElixir.GitHubProjects.Delivery do
           "readiness_is_live" => false,
           "deployment_runs_observed" => length(before.deployment.runs),
           "policy_commit" => client.settings.policy["contract_commit"],
-          "policy_hashes" => policy.hashes
+          "policy_hashes" => policy.hashes,
+          "watch_digest" => watch_digest(before)
         })
 
       reasons = before.reasons ++ deployment_reasons ++ ci_reasons ++ ["manual_dev_validation_required"]
@@ -86,6 +104,12 @@ defmodule SymphonyElixir.GitHubProjects.Delivery do
   end
 
   defp stamp(value), do: {value.dev, value.ownership, value.reasons, Ownership.pull_stamp(value.pulls), Runs.stamp(value.deployment), Runs.stamp(value.ci)}
+
+  defp watch_digest(value) do
+    {value.dev, value.ownership["project"], Ownership.pull_stamp(value.pulls), Runs.stamp(value.deployment), Runs.stamp(value.ci)}
+    |> :erlang.term_to_binary([:deterministic])
+    |> Policy.hash()
+  end
 
   defp saved_proofs(context) do
     cycle = context.state["cycle"]

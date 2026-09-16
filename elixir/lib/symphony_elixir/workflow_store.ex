@@ -8,6 +8,7 @@ defmodule SymphonyElixir.WorkflowStore do
 
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.DeliveryRuntime.Guard
   alias SymphonyElixir.GitHubProjects.Inspection
   alias SymphonyElixir.Workflow
 
@@ -133,9 +134,16 @@ defmodule SymphonyElixir.WorkflowStore do
   defp reload_path(path, state) do
     case load_state(path) do
       {:ok, new_state} ->
-        {:ok, new_state}
+        case Guard.reload(state.settings, new_state.settings) do
+          :ok -> {:ok, new_state}
+          {:error, reason} -> {:error, reason, state}
+        end
 
       {:error, reason} ->
+        if state.settings.tracker.kind == "github_projects" do
+          Guard.reload(state.settings, %Schema{})
+        end
+
         log_reload_error(path, reason)
         {:error, reason, state}
     end
@@ -150,6 +158,7 @@ defmodule SymphonyElixir.WorkflowStore do
         reload_path(path, state)
 
       {:error, reason} ->
+        if state.settings.tracker.kind == "github_projects", do: Guard.reload(state.settings, %Schema{})
         log_reload_error(path, reason)
         {:error, reason, state}
     end
