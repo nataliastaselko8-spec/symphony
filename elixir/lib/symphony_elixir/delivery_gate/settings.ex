@@ -42,7 +42,11 @@ defmodule SymphonyElixir.DeliveryGate.Settings do
         "active_states" => settings.tracker.active_states,
         "terminal_states" => settings.tracker.terminal_states,
         "ssh_hosts" => settings.worker.ssh_hosts,
-        "identity" => identity
+        "identity" => identity,
+        "runtime_contract" => 1,
+        "item_ids" => provider["item_ids"],
+        "required_labels" => settings.tracker.required_labels,
+        "validation_mode" => "manual"
       }
 
       contract = if settings.delivery.observer == %{}, do: contract, else: Map.put(contract, "observer", settings.delivery.observer)

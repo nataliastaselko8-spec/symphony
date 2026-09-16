@@ -31,6 +31,7 @@ defmodule SymphonyElixir.DeliveryObserverTest do
   test "retains owner outside pilot filter and binds CI without consuming another reservation", %{f: f, cache: cache} do
     f = %{f | project: put_in(f.project, ["items"], [F.item()]), prs: [F.pr()], ci_runs: [F.ci_run()]}
     config = put_in(f.config.tracker.provider["item_ids"], ["other-item"]).config
+    {:ok, selected_settings} = Settings.parse(config)
     context = context(Gate.reviewed())
     opts = Keyword.put(F.opts(f, cache), :context, context)
     {:ok, first} = Delivery.observe(config, opts)
@@ -40,9 +41,9 @@ defmodule SymphonyElixir.DeliveryObserverTest do
     assert first.facts["ci"]["origin"] == "reserved"
     assert first.facts["ci"]["tested_sha"] == F.sha("c")
     assert first.facts["ci"]["head_sha"] == F.sha("b")
-    assert {:ok, [%{action: "observe_ci", args: args}]} = Observation.commands(first, f.settings, context)
+    assert {:ok, [%{action: "observe_ci", args: args}]} = Observation.commands(first, selected_settings, context)
     assert args["reservation_id"] == "ci-1"
-    assert {:ok, [%{args: ^args}]} = Observation.commands(second, f.settings, context)
+    assert {:ok, [%{args: ^args}]} = Observation.commands(second, selected_settings, context)
     assert map_size(context.state["cycle"]["budget"]["ci"]) == 1
     assert first.facts["task"] == %{"item_id" => "item-A", "issue_id" => "issue-A"}
   end

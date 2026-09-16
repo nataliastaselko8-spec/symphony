@@ -5,6 +5,7 @@ defmodule SymphonyElixir.AgentRuntimeSupervisor do
 
   use Supervisor
 
+  alias SymphonyElixir.{Config, DeliveryGate, DeliveryRuntime}
   alias SymphonyElixir.GitHub.Credentials.Cache
 
   @spec start_link(keyword()) :: Supervisor.on_start()
@@ -21,18 +22,41 @@ defmodule SymphonyElixir.AgentRuntimeSupervisor do
     orchestrator_name = Keyword.get(opts, :orchestrator_name, SymphonyElixir.Orchestrator)
 
     credentials_cache_name = Keyword.get(opts, :credentials_cache_name, Cache)
+    config = Keyword.get_lazy(opts, :config, &Config.settings!/0)
+    delivery = if config.tracker.kind == "github_projects", do: Keyword.get(opts, :delivery_name, DeliveryRuntime)
+    gate = Keyword.get(opts, :gate_name, DeliveryGate)
+    gate_options = [name: gate, settings: elem(Config.delivery_settings(config), 1)]
+    gate_children = if delivery, do: [{DeliveryGate, gate_options}], else: []
 
-    children = [
-      {Cache, name: credentials_cache_name},
-      Supervisor.child_spec(
-        {Task.Supervisor, name: task_supervisor_name},
-        id: task_supervisor_name
-      ),
-      Supervisor.child_spec(
-        {SymphonyElixir.Orchestrator, name: orchestrator_name, task_supervisor: task_supervisor_name},
-        id: orchestrator_name
-      )
-    ]
+    runtime_children =
+      if delivery do
+        [
+          {DeliveryRuntime,
+           [name: delivery, gate: gate, config: config, task_supervisor: task_supervisor_name] ++
+             Keyword.get(opts, :delivery_options, [])}
+        ]
+      else
+        []
+      end
+
+    orchestrator_options = [name: orchestrator_name, task_supervisor: task_supervisor_name, delivery_runtime: delivery]
+
+    children =
+      [{Cache, name: credentials_cache_name}] ++
+        gate_children ++
+        [
+          Supervisor.child_spec(
+            {Task.Supervisor, name: task_supervisor_name},
+            id: task_supervisor_name
+          )
+        ] ++
+        runtime_children ++
+        [
+          Supervisor.child_spec(
+            {SymphonyElixir.Orchestrator, orchestrator_options},
+            id: orchestrator_name
+          )
+        ]
 
     Supervisor.init(children, strategy: :one_for_all)
   end

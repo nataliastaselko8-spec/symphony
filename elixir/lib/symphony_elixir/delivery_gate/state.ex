@@ -248,7 +248,27 @@ defmodule SymphonyElixir.DeliveryGate.State do
     end
   end
 
+  defp transition(state, "review_resume", args) do
+    cycle = state["cycle"]
+    bucket = if cycle["budget"]["fixes"] == 0, do: "initial_ms", else: "fix_ms"
+
+    if review_matches?(cycle, args) and quiet?(cycle) and args["sha"] == state["baseline"]["sha"] and
+         args[bucket] > 0 do
+      extension = Map.drop(args, ~w(sha head_sha pr_number))
+      {:ok, budget} = Budget.apply_command(cycle["budget"], "extend_budget", extension)
+      put_cycle(state, %{cycle | "budget" => budget, "phase" => "reserved", "block_reason" => nil})
+    else
+      {:error, :review_resume_not_allowed}
+    end
+  end
+
   defp transition(_, _, _), do: {:error, :invalid_phase}
+
+  defp review_matches?(cycle, args) do
+    cycle["phase"] == "awaiting_review" and cycle["cancellation"] == nil and
+      cycle["work"]["merge_sha"] == nil and cycle["work"]["pr_number"] == args["pr_number"] and
+      cycle["work"]["head_sha"] == args["head_sha"]
+  end
 
   defp budget_phase(cycle, "start_work", args) do
     expected = if cycle["budget"]["fixes"] == 0, do: "initial", else: "fix"

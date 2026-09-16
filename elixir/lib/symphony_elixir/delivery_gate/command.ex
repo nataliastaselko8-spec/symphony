@@ -36,7 +36,8 @@ defmodule SymphonyElixir.DeliveryGate.Command do
     "assign_recovery" => @task ++ @operator ++ [sha: :sha] ++ @recovery_limits,
     "finish_recovery" => @proof,
     "extend_budget" => @operator ++ @limits,
-    "resume" => @operator ++ [sha: :sha]
+    "resume" => @operator ++ [sha: :sha],
+    "review_resume" => @operator ++ @limits ++ [sha: :sha, head_sha: :sha, pr_number: :positive]
   }
 
   @spec validate(String.t(), map()) :: :ok | {:error, atom()}

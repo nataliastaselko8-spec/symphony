@@ -22,7 +22,7 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Ownership do
 
   defp project_row(row) do
     row
-    |> Map.take(~w(item_id state archived issue_state))
+    |> Map.take(~w(item_id state archived issue_state eligible))
     |> Map.put(
       "native_ref",
       Map.take(row["native_ref"], ~w(issue_id repo status_option_id agent_allowed_option_id))

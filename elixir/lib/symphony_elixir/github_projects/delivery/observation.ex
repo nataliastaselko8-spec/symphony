@@ -117,7 +117,8 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Observation do
 
   defp deployment_command(_, _), do: []
 
-  defp fingerprint(value), do: value |> :erlang.term_to_binary([:deterministic]) |> Policy.hash()
+  # Reconciliation changes only the ephemeral mode, not the observed persisted state.
+  defp fingerprint(value), do: value |> Map.take([:version, :state]) |> :erlang.term_to_binary([:deterministic]) |> Policy.hash()
   defp diagnostic({:github_delivery_limited, seconds}), do: {"github_delivery_limited", seconds}
   defp diagnostic({:github_delivery_http, status}), do: {"github_delivery_http_#{status}", nil}
   defp diagnostic({:github_projects_http, status, _}), do: {"github_projects_http_#{status}", nil}

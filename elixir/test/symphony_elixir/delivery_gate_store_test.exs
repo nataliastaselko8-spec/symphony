@@ -60,6 +60,40 @@ defmodule SymphonyElixir.DeliveryGateStoreTest do
     assert {:error, :unvalidated_base} = DeliveryGate.admission(pid, version(pid), "new")
   end
 
+  test "work permits bind one process, activate once and cannot survive cancellation", %{settings: settings} do
+    gate = boot(settings)
+    assert :ok = DeliveryGate.reconcile(gate, version(gate), settings.scope, sha())
+    assert {:error, :work_start_rejected} = DeliveryGate.begin_work(gate, version(gate), "item-A", nil, "initial", self())
+    assert {:ok, receipt} = DeliveryGate.begin_work(gate, version(gate), "item-A", "interval", "initial", self())
+    assert {:error, :worker_permit_revoked} = DeliveryGate.worker_check(gate, receipt.nonce, :continue)
+    assert {:error, :worker_permit_revoked} = DeliveryGate.worker_check(gate, receipt.nonce, :unknown)
+    assert {:error, :worker_permit_revoked} = Task.async(fn -> DeliveryGate.worker_check(gate, receipt.nonce, :activate) end) |> Task.await()
+    assert :ok = DeliveryGate.worker_check(gate, receipt.nonce, :activate)
+    assert {:error, :worker_permit_revoked} = DeliveryGate.worker_check(gate, receipt.nonce, :activate)
+    assert {:ok, _} = execute(gate, settings, "request_cancel", operator())
+    assert {:error, :worker_permit_revoked} = DeliveryGate.worker_check(gate, receipt.nonce, :continue)
+  end
+
+  test "read and write failures cannot grant a work permit", %{settings: settings, root: root} do
+    gate = boot(settings)
+    assert :ok = DeliveryGate.reconcile(gate, version(gate), settings.scope, sha())
+    File.chmod!(root, 0o500)
+
+    try do
+      assert {:error, :store_operation_failed} = DeliveryGate.begin_work(gate, version(gate), "item-A", "interval", "initial", self())
+    after
+      File.chmod!(root, 0o700)
+    end
+
+    assert DeliveryGate.status(gate).mode == :store_unavailable
+    GenServer.stop(gate)
+    gate = start_gate(settings)
+    assert :ok = DeliveryGate.reconcile(gate, version(gate), settings.scope, sha())
+    File.write!(settings.path, "corrupt")
+    assert {:error, :store_operation_failed} = DeliveryGate.admission(gate, version(gate), "item-A")
+    assert DeliveryGate.status(gate).mode == :store_unavailable
+  end
+
   test "state and budgets survive restart but old commands and old readiness do not", %{settings: settings} do
     pid = boot(settings)
     assert {:ok, _} = execute(pid, settings, "start_work", %{"interval_id" => "s", "budget" => "initial"})

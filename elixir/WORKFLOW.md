@@ -6,6 +6,8 @@
 # It is not enabled by this Linear workflow or by adding delivery.state_path.
 # Read-only delivery observer and pinned policy: docs/github_projects_delivery.md.
 # Run separately with mix github_projects.delivery.inspect; no worker or store writes.
+# Internal lifecycle and bounded SYMPHONY_DELIVERY_CONTEXT hook input: docs/delivery_runtime.md.
+# Projects execution stays disabled; the product's executable workflow belongs in agent-runner.
 tracker:
   kind: linear
   provider:
