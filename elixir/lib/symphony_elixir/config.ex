@@ -35,6 +35,9 @@ defmodule SymphonyElixir.Config do
   @spec delivery_settings(Schema.t()) :: {:ok, map()} | {:error, atom()}
   def delivery_settings(settings), do: DeliverySettings.from_config(settings)
 
+  @spec delivery_observer_settings(Schema.t()) :: {:ok, map()} | {:error, atom()}
+  def delivery_observer_settings(settings), do: SymphonyElixir.GitHubProjects.Delivery.Settings.parse(settings)
+
   @spec settings!() :: Schema.t()
   def settings! do
     case settings() do

@@ -2,7 +2,7 @@
 
 **Подключение deployment evidence (PR-05 и последующие этапы):** инструкции controller, дашборда и приёмки запуска перенесены в [отдельный документ Symphony](github_projects_setup/deployment-evidence-integration.md). Текущая рабочая папка — `D:/symphony`; `D:/fork/_symphony/symphony` в более ранних записях ниже — прежнее расположение. Контракт отчёта и эксплуатация deployment workflow остаются в `EmotionStat/app`.
 
-Дата: 2026-09-15. Статус: **PR-02 слит владелицей, PR-03 реализован и опубликован для ревью** — [PR #1](https://github.com/nataliastaselko8-spec/symphony/pull/1) и [draft PR #2](https://github.com/nataliastaselko8-spec/symphony/pull/2). Локальный make all, живое чтение Project и обе проверки GitHub Actions PR-03 пройдены. PR-01 отложен; PR-04–PR-15 не реализованы. Идентификаторы этапов не совпадают с номерами GitHub PR. Deployment и пилот не запускались.
+Обновлено: 2026-09-16. **PR-02–PR-06 реализованы; PR-07 подготовлен локально** в `agent/feat/github-delivery-observer` от `main` (`56b4fbb`). PR-04/PR-05 приняты в приложении: текущий deployment и evidence проверены через GitHub App. `make all` PR-07 и read-only приёмка пройдены. Push и merge PR-07 выполняет владелица. PR-01 отложен; PR-08–PR-15 и пилот ещё предстоят. Идентификаторы этапов не совпадают с номерами GitHub PR; исторические записи ниже сохраняют состояние на свою дату.
 
 **Изменение очередности по решению владелицы 2026-09-15:** сейчас knowledge-base не изменяем. PR-01 отложен, его объём объединяется с итоговым PR-15 после реализации и проверки пилота либо фиксации его остановки. Первый этап реализации — PR-02 в выбранном форке Symphony; ожидать PR-01 не требуется. Нумерация этапов сохранена для существующих ссылок. Новые решения, вопросы и результаты проверок записываются в этих двух планах и документации соответствующих кодовых PR; подтверждённые итоги затем переносятся в базу знаний одним согласованным обновлением. Обязательная документация поведения/config в Symphony и agent-runner обновляется вместе с кодом.
 
@@ -12,12 +12,12 @@
 
 | Вопрос | Состояние на дату плана | Следствие |
 | --- | --- | --- |
-| Symphony | `D:/fork/_symphony/symphony`, рабочая ветка `agent/feat/github-projects-inspection` отслеживает одноимённую ветку origin; документы сохранены | PR-02: commit `9b223bc12f936e3da3a84bbe3016b56028e9c51a`, draft PR #1 → `main`. Дальнейшие изменения Symphony выполнять в этой папке |
+| Symphony | `D:/symphony`, PR-07 в `agent/feat/github-delivery-observer` от `main` (`56b4fbb`) | Все дальнейшие изменения Symphony выполнять здесь; PR направлять в личный fork с базой `main` |
 | agent-runner | `D:/agent-runner`, default branch `main` | Служебные PR направляются в `main` |
 | Knowledge-base | `D:/work/EmotionStat/knowledge-base`, default branch `main` | Изменения отложены; согласованные итоги реализации и пилота объединяются в PR-15 в `main` |
 | Приложение | `D:/EmotionStat_app/app`, локальная ветка `dev` | Все предлагаемые app PR направляются в `dev`; default branch проверить через GitHub |
 | Delivery | Организация `EmotionStat`, Project `1`, рабочий repo только `EmotionStat/app` | Private API IDs, типы полей, права и автоматизации проверить read-only |
-| Проверки приложения | По проверенному deployment canon `verify` выполняется после push в `dev`; автоматических post-deploy smoke tests пока нет | Нужен PR CI до merge; в первом профиле dev validation ручная |
+| Проверки приложения | PR-04 добавил PR CI до merge; deployment повторяет verify для `dev`. PR-05 публикует evidence | Автоматических post-deploy smoke tests пока нет; dev validation ручная |
 | Runtime | **WSL2 выбран; создан отдельный distro `Ubuntu-26.04` для worker** | В новом distro отключены Windows automount/interop, проверен вход под uid 2002. В новом distro проверен rootless Podman 5.7.0. Codex и SSH пока проверены только в прежнем `Ubuntu`; контейнер worker и финальная изоляция O2 ещё не настроены |
 | Fork Symphony | **Подтверждён:** [nataliastaselko8-spec/symphony](https://github.com/nataliastaselko8-spec/symphony), публичный fork `openai/symphony`, default branch `main` | `origin` и default push remote — личный fork; `upstream` — `openai/symphony`. Symphony PR направляются в fork с базой `main`. Права публикации проверены: ветка и draft PR #1 опубликованы в личном форке; upstream не изменён |
 | GitHub identity | **Подтверждено владельцем: отдельное GitHub App, принадлежащее EmotionStat** | PR-03 реализует обновление installation tokens на controller. O3a подтверждён через GitHub API 2026-09-15: App принадлежит EmotionStat, установка активна, repository_selection=selected, запрошенные права выданы. Ключ установлен вне repo в защищённой папке controller. O3b подтверждён конечной read-only inspection: токен ограничен EmotionStat/app, Project Delivery прочитан без ошибок. Полный список остальных repo установки этим суженным токеном не проверяется. Service PAT в выбранный профиль не входит |
@@ -291,6 +291,10 @@ flowchart TD
 ### PR-07 — Наблюдать весь repo, PR и текущий dev
 
 **Repo/base:** `nataliastaselko8-spec/symphony` → `main`. **Title:** `Reconcile delivery cycles with pull requests and development runs`.
+
+**Подробный план для валидации:** [порядок реализации PR-07](github_projects_setup/pr07-execution-plan.md), включая credentials, выбор попытки, evidence, отмену, диагностику и критерии приёмки.
+
+**Результат реализации 2026-09-16:** [контракт observer и инструкция запуска](github_projects_delivery.md), [готовое описание PR](github_projects_setup/pr07-description.md). Конечная диагностика проверяет всю доску и историю запусков, закреплённые workflow/scripts, digest ZIP, receipts и GitHub jobs. Наблюдения связаны с версией и содержимым цикла; отмена/recovery не освобождают владельца. Полный `make all` пройден: 445 Elixir tests, 0 failures, 6 skipped, 100% измеряемого покрытия, 8 Python tests. Подтверждено живое read-only чтение deployment `35095177024/1`, artifact `10446890300`. Runtime/store/UI не подключаются; свежая проверка Queue после ручного снятия паузы остаётся отдельным решением до PR-10/пилота.
 
 **Цель / было → станет:** admission получает свежие факты о merge/deployment; фильтр пилота не скрывает блокирующую чужую работу.
 

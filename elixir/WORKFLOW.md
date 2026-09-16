@@ -4,6 +4,8 @@
 # Controller App authentication and renewal: docs/github_app_credentials.md.
 # Optional delivery state contract for future Projects execution: docs/delivery_cycle.md.
 # It is not enabled by this Linear workflow or by adding delivery.state_path.
+# Read-only delivery observer and pinned policy: docs/github_projects_delivery.md.
+# Run separately with mix github_projects.delivery.inspect; no worker or store writes.
 tracker:
   kind: linear
   provider:

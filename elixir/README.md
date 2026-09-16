@@ -273,6 +273,17 @@ needed for synthetic tests. Live reads support
 [GitHub App authentication and token renewal](docs/github_app_credentials.md) on the controller,
 or an externally supplied token.
 
+The App-only [delivery observer](docs/github_projects_delivery.md) reads PRs, current dev,
+complete Actions history and pinned deployment evidence without starting the runtime:
+
+```bash
+mise exec -- mix github_projects.delivery.inspect --workflow /controller/inspection.WORKFLOW.md
+```
+
+Configure `delivery.observer.contract_commit` and `contract_sha256` in that profile first.
+Exit codes are 0 (full observation, manual validation pending), 1 (incomplete/error), and
+2 (additional confirmed blocker). None authorizes worker execution or changes the delivery store.
+
 ### Jira Cloud adapter
 
 - Config: use `tracker.kind: jira` with provider `base_url`, `email`, `api_token`, and required

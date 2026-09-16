@@ -45,6 +45,7 @@ defmodule SymphonyElixir.DeliveryGate.Settings do
         "identity" => identity
       }
 
+      contract = if settings.delivery.observer == %{}, do: contract, else: Map.put(contract, "observer", settings.delivery.observer)
       hash = :crypto.hash(:sha256, :erlang.term_to_binary(contract, [:deterministic])) |> Base.encode16(case: :lower)
 
       scope = %{
