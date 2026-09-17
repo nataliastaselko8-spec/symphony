@@ -44,7 +44,12 @@ change the existing trackers' in-memory scheduling and cleanup behavior.
 
 [Task publication](docs/github_projects_publication.md) adds session-bound Projects tools,
 a durable outbox and a controller-only Git bundle publisher. The worker exporter, external
-stop verification and operator UI remain rollout prerequisites; this is not a live startup profile.
+stop verification remain rollout prerequisites; this is not a live startup profile.
+
+The [operator dashboard](docs/operator_dashboard.md) provides local authentication and durable
+manual dev validation, pause, cancellation, recovery and additive budgets. The runbook includes
+credential setup and an isolated demo using the actual Runtime/Gate with synthetic observations.
+Reconfirmation after manually unpausing Cloudflare Queue still requires a selected evidence source.
 
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).
@@ -291,8 +296,9 @@ Exit codes are 0 (full observation, manual validation pending), 1 (incomplete/er
 The internal [delivery runtime contract](docs/delivery_runtime.md) now connects the gate and
 observer to scheduler, worker, hooks and cleanup. One repository owner survives worker exit,
 CI/review/deployment waits, cancellation and restart. It uses single-use process-bound permits
-and monotonic active-time accounting. Production Projects startup remains disabled: publishing,
-authenticated operator controls and verified SSH/Podman process shutdown require later stages.
+and monotonic active-time accounting. Publication and authenticated operator controls are implemented
+as staged components. Production Projects startup remains disabled until verified SSH/Podman
+shutdown, the agent-runner profile and system acceptance are connected.
 Existing delivery stores have a changed scope fingerprint; there is no automatic migration.
 
 ### Jira Cloud adapter

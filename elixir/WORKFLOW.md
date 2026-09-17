@@ -10,6 +10,9 @@
 # Projects execution stays disabled; the product's executable workflow belongs in agent-runner.
 # Session-bound task tools and controller publication: docs/github_projects_publication.md.
 # project_handoff submits retained intent; only verified CI permits PR ready. Merge stays with the operator.
+# Optional server.operator: {principal: local:OWNER, credential_path: /home/CONTROLLER/private/login-token}.
+# Requires explicit server.host loopback and server.port; see docs/operator_dashboard.md for setup/demo.
+# The credential is controller-only, outside workspace/checkouts. This does not enable Projects execution.
 tracker:
   kind: linear
   provider:

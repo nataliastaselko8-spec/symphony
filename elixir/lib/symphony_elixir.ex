@@ -24,6 +24,7 @@ defmodule SymphonyElixir.Application do
   use Application
 
   alias SymphonyElixir.GitHubProjects.Inspection
+  alias SymphonyElixir.Operator.Auth
 
   @dialyzer {:nowarn_function, start_burrito_cli: 0}
 
@@ -51,6 +52,7 @@ defmodule SymphonyElixir.Application do
       {Phoenix.PubSub, name: SymphonyElixir.PubSub},
       SymphonyElixir.WorkflowStore,
       SymphonyElixir.AgentRuntimeSupervisor,
+      {Auth, name: Auth, settings: operator_settings()},
       SymphonyElixir.HttpServer,
       SymphonyElixir.StatusDashboard
     ]
@@ -60,6 +62,11 @@ defmodule SymphonyElixir.Application do
       strategy: :one_for_one,
       name: SymphonyElixir.Supervisor
     )
+  end
+
+  defp operator_settings do
+    {:ok, settings} = Auth.from_config(SymphonyElixir.Config.settings!())
+    settings
   end
 
   @impl true

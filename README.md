@@ -17,7 +17,9 @@ that verify PRs, development runs and deployment evidence. An internal
 [delivery runtime](elixir/docs/delivery_runtime.md) connects retained ownership and budgets
 to worker admission, cancellation and cleanup. Its [task publisher](elixir/docs/github_projects_publication.md)
 retains publication intent, confines Git writes to the task branch and waits for verified CI.
-Projects-based agent execution is not enabled yet.
+A local [operator dashboard](elixir/docs/operator_dashboard.md) authenticates the owner and
+records version-bound validation, pause, cancellation and recovery decisions in the same store.
+An isolated demo is available; Projects-based agent execution is not enabled yet.
 
 ## Running Symphony
 

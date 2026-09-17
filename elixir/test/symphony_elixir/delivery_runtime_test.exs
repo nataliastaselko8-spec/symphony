@@ -6,6 +6,7 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
   alias SymphonyElixir.DeliveryGateSupport, as: G
   alias SymphonyElixir.DeliveryObserverSupport, as: F
   alias SymphonyElixir.GitHubProjects.Delivery.Observation
+  alias SymphonyElixir.Operator.{Auth, Control, Credential}
   alias SymphonyElixir.Tracker.Issue
 
   setup do
@@ -50,7 +51,8 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
       native_ref: row(letter)["native_ref"]
     }
 
-  defp await(runtime, predicate, attempts \\ 200)
+  # Real fsync-backed store transitions can take longer under parallel WSL test load.
+  defp await(runtime, predicate, attempts \\ 1_000)
   defp await(_, _, 0), do: flunk("runtime did not reach the expected state")
 
   defp await(runtime, predicate, attempts) do
@@ -65,7 +67,8 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
         )
   end
 
-  defp ready(runtime), do: await(runtime, &(&1.observation != nil and &1.gate.mode == :reconciled))
+  defp ready(runtime),
+    do: await(runtime, &(&1.observation != nil and &1.gate.mode == :reconciled and &1.observation.expected_version == &1.gate.version and :sys.get_state(runtime).read == nil))
 
   defp boot(c, overrides \\ []) do
     runtime = start_supervised!({DeliveryRuntime, Keyword.merge(c.opts, overrides)})
@@ -340,6 +343,43 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
     assert Enum.all?(state.gate.state["cycle"]["effects"], fn {_, effect} -> effect["steps"] == %{} end)
   end
 
+  test "operator pause revokes a pending publisher and unpause does not discard its unresolved intent", c do
+    parent = self()
+
+    runner = fn _, _, _, authorize, _ ->
+      send(parent, {:ready_to_send, self()})
+
+      receive do
+        :continue -> send(parent, {:late_authorization, authorize.("comment", %{})})
+      end
+
+      {:error, :revoked}
+    end
+
+    runtime = boot(c, publication_step: runner, stop_verifier: &stopped/1)
+    reserve(runtime)
+    {pid, _} = start_worker(runtime)
+    task_tool(pid, "project_report", %{"body" => "Progress"})
+    assert_receive {:ready_to_send, publisher}, 2_000
+    {auth, session} = operator_pause(c, runtime)
+    send(publisher, :continue)
+    assert_receive {:late_authorization, {:error, :effect_revoked}}, 2_000
+    await(runtime, &(&1.worker == nil and :sys.get_state(runtime).effect == nil))
+    Agent.update(c.clock, fn _ -> 30_000 end)
+    DeliveryRuntime.refresh(runtime)
+    state = ready(runtime)
+    assert state.gate.state["operator_pause"] != nil
+    effects = state.gate.state["cycle"]["effects"]
+    assert Enum.all?(effects, fn {_, effect} -> effect["steps"] == %{} end)
+    {:ok, form} = Control.prepare(auth, session, runtime, "unpause")
+    reason = %{"reason" => "Resume only within retained permissions"}
+    assert {:ok, _} = Control.execute(auth, session, form.id, reason)
+    saved = DeliveryGate.status(c.gate).state
+    assert saved["operator_pause"] == nil
+    assert saved["cycle"]["owner"]["item_id"] == "item-A"
+    assert saved["cycle"]["effects"] == effects
+  end
+
   test "a foreign operation response cannot settle the real outbox", c do
     parent = self()
 
@@ -537,6 +577,44 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
     assert {:error, _} = DeliveryRuntime.dispatch(runtime, issue(), nil, fn _ -> flunk("cancelled worker resumed") end)
   end
 
+  defp operator_pause(c, runtime) do
+    path = Path.join(c.root, "operator-token")
+    :ok = Credential.create(path)
+    auth = start_supervised!({Auth, settings: %{principal: "local:owner", credential_path: path, origin: "http://localhost:4080"}})
+    {:ok, session} = Auth.login(auth, String.trim(File.read!(path)))
+    {:ok, form} = Control.prepare(auth, session, runtime, "pause")
+    assert {:ok, _} = Control.execute(auth, session, form.id, %{"reason" => "Operator stopped work"})
+    {auth, session}
+  end
+
+  test "authenticated operator pause kills worker and retains owner and measured budget", c do
+    runtime = boot(c)
+    reserve(runtime)
+    {pid, handle} = start_worker(runtime)
+    Agent.update(c.clock, fn _ -> 15_000 end)
+    operator_pause(c, runtime)
+    state = await(runtime, &(&1.worker == nil and &1.observation != nil))
+    refute Process.alive?(pid)
+    assert state.gate.state["operator_pause"]["actor"] == "local:owner"
+    assert state.gate.state["cycle"]["owner"]["item_id"] == "item-A"
+    assert state.gate.state["cycle"]["budget"]["initial_ms"] == 15_000
+    assert {:error, :worker_permit_revoked} = DeliveryRuntime.check(handle)
+    assert {:error, _} = DeliveryRuntime.dispatch(runtime, issue("B"), nil, fn _ -> flunk("paused worker resumed") end)
+  end
+
+  test "operator pause cannot acknowledge an unverified external stop", c do
+    runtime = boot(c)
+    reserve(runtime)
+    {pid, _} = start_worker(runtime, "worker")
+    send(pid, :effect)
+    assert_receive {:checked, :ok}
+    operator_pause(c, runtime)
+    state = await(runtime, &(&1.worker.status == :stop_unconfirmed))
+    assert state.gate.state["operator_pause"] != nil
+    assert state.gate.state["cycle"]["budget"]["interval"] != nil
+    assert {:error, :worker_not_stopped} = DeliveryRuntime.dispatch(runtime, issue("B"), nil, fn _ -> flunk("unverified stop released owner") end)
+  end
+
   test "unconfirmed external stop retains interval and blocks the next worker", c do
     runtime = boot(c)
     reserve(runtime)
@@ -730,6 +808,7 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
     DeliveryRuntime.refresh(runtime)
     assert ready(runtime).gate.version == state.gate.version
     assert {:error, _} = DeliveryRuntime.dispatch(runtime, issue(), nil, fn _ -> flunk("review restarted") end)
+    ready(runtime)
     Agent.update(source, &Map.merge(&1, %{"pr" => %{"state" => "merged", "ancestry" => "included", "number" => 7, "merge_sha" => G.sha("c")}, "dev_sha" => G.sha("c"), "deployment" => G.deployment()}))
     DeliveryRuntime.refresh(runtime)
     state = await(runtime, &(&1.gate.state["cycle"]["phase"] == "awaiting_validation" and &1.observation != nil))
@@ -737,6 +816,7 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
     assert state.observation.manual_validation == "pending"
     assert map_size(state.gate.state["cycle"]["budget"]["ci"]) == 1
     assert {:error, _} = DeliveryRuntime.dispatch(runtime, issue("B"), nil, fn _ -> flunk("validation bypassed") end)
+    ready(runtime)
     # A changed final result cannot overwrite a previously committed CI result.
     Agent.update(source, &put_in(&1, ["ci", "result"], "failure"))
     DeliveryRuntime.refresh(runtime)

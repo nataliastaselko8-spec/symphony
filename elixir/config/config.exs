@@ -1,6 +1,7 @@
 import Config
 
 config :phoenix, :json_library, Jason
+config :phoenix, :filter_parameters, ["password", "credential", "operator_session", "token", "secret"]
 
 config :symphony_elixir, SymphonyElixirWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,

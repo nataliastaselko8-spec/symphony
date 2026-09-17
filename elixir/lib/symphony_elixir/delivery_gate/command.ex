@@ -1,4 +1,6 @@
 defmodule SymphonyElixir.DeliveryGate.Command do
+  alias SymphonyElixir.Operator.Decision
+
   @moduledoc """
   Closed, JSON-only vocabulary for trusted controller commands.
 
@@ -45,6 +47,8 @@ defmodule SymphonyElixir.DeliveryGate.Command do
   }
 
   @spec validate(String.t(), map()) :: :ok | {:error, atom()}
+  def validate("operator_decision", args), do: Decision.validate(args)
+
   def validate(action, args) when action in ~w(effect_request effect_submit effect_sent effect_confirm effect_candidate),
     do: Effects.validate(action, args)
 

@@ -1,4 +1,10 @@
 defmodule SymphonyElixirWeb.DashboardLive do
+  alias SymphonyElixir.DeliveryRuntime
+  alias SymphonyElixir.Operator.Auth
+  alias SymphonyElixir.Operator.Control
+  alias SymphonyElixir.Operator.View
+  alias SymphonyElixirWeb.OperatorAuth
+
   @moduledoc """
   Live observability dashboard for Symphony.
   """
@@ -9,11 +15,18 @@ defmodule SymphonyElixirWeb.DashboardLive do
   @runtime_tick_ms 1_000
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(_params, session, socket) do
     socket =
       socket
       |> assign(:payload, load_payload())
       |> assign(:now, DateTime.utc_now())
+      |> assign(:operator_session, session["operator_session"])
+      |> assign(:operator_model, nil)
+      |> assign(:operator_form, nil)
+      |> assign(:operator_error, nil)
+      |> assign(:operator_notice, nil)
+      |> assign(:operator_pending, %{})
+      |> operator_tick()
 
     if connected?(socket) do
       :ok = ObservabilityPubSub.subscribe()
@@ -26,21 +39,83 @@ defmodule SymphonyElixirWeb.DashboardLive do
   @impl true
   def handle_info(:runtime_tick, socket) do
     schedule_runtime_tick()
-    {:noreply, assign(socket, :now, DateTime.utc_now())}
+    {:noreply, socket |> assign(:now, DateTime.utc_now()) |> operator_tick()}
+  end
+
+  def handle_info(:observability_updated, socket) do
+    {:noreply, socket |> assign(:payload, load_payload()) |> assign(:now, DateTime.utc_now())}
   end
 
   @impl true
-  def handle_info(:observability_updated, socket) do
-    {:noreply,
-     socket
-     |> assign(:payload, load_payload())
-     |> assign(:now, DateTime.utc_now())}
+  def handle_event("operator_prepare", %{"action" => action}, socket) do
+    socket = assign(socket, :operator_notice, nil)
+    result = Control.prepare(OperatorAuth.server(), socket.assigns.operator_session, operator_runtime(), action)
+
+    case result do
+      {:ok, form} -> {:noreply, socket |> assign(:operator_form, form) |> assign(:operator_error, nil)}
+      {:error, reason} -> {:noreply, assign(socket, :operator_error, View.message(reason))}
+    end
+  end
+
+  def handle_event("operator_submit", %{"form_id" => id} = params, socket) do
+    auth = OperatorAuth.server()
+    session = socket.assigns.operator_session
+    payload = Map.drop(params, ~w(form_id))
+
+    socket =
+      socket
+      |> assign(:operator_error, nil)
+      |> assign(:operator_notice, nil)
+      |> assign(:operator_pending, Map.put(socket.assigns.operator_pending, id, true))
+      |> start_async({:operator, id}, fn -> Control.execute(auth, session, id, payload) end)
+
+    {:noreply, socket}
+  end
+
+  def handle_event("operator_close_form", _, socket), do: {:noreply, assign(socket, :operator_form, nil)}
+
+  def handle_event("operator_preview", params, socket) do
+    form = socket.assigns.operator_form
+    {:noreply, assign(socket, :operator_form, if(form, do: View.preview(form, params)))}
+  end
+
+  def handle_event("operator_refresh", _, socket) do
+    result = with {:ok, _} <- Auth.check(OperatorAuth.server(), socket.assigns.operator_session, true), do: Auth.allow_read(OperatorAuth.server(), socket.assigns.operator_session)
+
+    case result do
+      :ok ->
+        DeliveryRuntime.refresh(operator_runtime())
+        {:noreply, assign(socket, :operator_notice, "Запрошена сверка. Дождитесь обновления данных.")}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :operator_error, View.message(reason))}
+    end
+  end
+
+  @impl true
+  def handle_async({:operator, id}, result, socket) do
+    socket = socket |> assign(:operator_pending, Map.delete(socket.assigns.operator_pending, id)) |> operator_tick()
+
+    case result do
+      {:ok, {:ok, _}} ->
+        form = if socket.assigns.operator_form && socket.assigns.operator_form.id != id, do: socket.assigns.operator_form
+        {:noreply, socket |> assign(:operator_form, form) |> assign(:operator_notice, "Решение сохранено. Допуск к работе проверяется отдельно.")}
+
+      {:ok, {:error, reason}} ->
+        {:noreply, assign(socket, :operator_error, View.message(reason))}
+
+      _ ->
+        {:noreply, assign(socket, :operator_error, "Ответ не получен. Повторите отправку той же формы для проверки результата.")}
+    end
   end
 
   @impl true
   def render(assigns) do
     ~H"""
     <section class="dashboard-shell">
+      <SymphonyElixirWeb.OperatorPanel.panel :if={@operator_model} model={@operator_model} form={@operator_form}
+        error={@operator_error} notice={@operator_notice} busy={map_size(@operator_pending) > 0} demo={Endpoint.config(:operator_demo) == true} />
+      <div :if={is_nil(@operator_model)} class="legacy-dashboard">
       <header class="hero-card">
         <div class="hero-grid">
           <div>
@@ -325,12 +400,30 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <% end %>
         </section>
       <% end %>
+      </div>
     </section>
     """
   end
 
   defp load_payload do
     Presenter.state_payload(orchestrator(), snapshot_timeout_ms())
+  end
+
+  defp operator_runtime, do: Endpoint.config(:operator_runtime) || DeliveryRuntime
+
+  defp operator_tick(%{assigns: %{operator_session: nil}} = socket), do: socket
+
+  defp operator_tick(socket) do
+    case OperatorAuth.live_session(socket.assigns.operator_session) do
+      :ok -> assign(socket, :operator_model, operator_status())
+      _ -> redirect(socket, to: "/operator/login")
+    end
+  end
+
+  defp operator_status do
+    operator_runtime() |> DeliveryRuntime.status() |> View.project()
+  catch
+    :exit, _ -> View.project(%{})
   end
 
   defp orchestrator do

@@ -1,4 +1,5 @@
 defmodule SymphonyElixir.DeliveryGate.State do
+  alias SymphonyElixir.Operator.Decision
   @moduledoc "Pure delivery-cycle transitions. Inputs are verified controller facts, not GitHub responses."
 
   alias SymphonyElixir.DeliveryGate.{Budget, Command, Effects}
@@ -7,7 +8,7 @@ defmodule SymphonyElixir.DeliveryGate.State do
   @budget_errors [:time_budget_exhausted, :fix_budget_exhausted, :ci_budget_exhausted, :retry_budget_exhausted]
 
   @spec new() :: map()
-  def new, do: %{"status" => "bootstrap_required", "baseline" => nil, "cycle" => nil, "last_cycle" => nil}
+  def new, do: %{"status" => "bootstrap_required", "baseline" => nil, "cycle" => nil, "last_cycle" => nil, "operator_pause" => nil, "environment_problem" => nil}
 
   @spec apply_command(map(), String.t(), map()) :: {:ok, map()} | {:error, atom()}
   def apply_command(state, action, args) do
@@ -15,6 +16,12 @@ defmodule SymphonyElixir.DeliveryGate.State do
   end
 
   @spec admission(map(), String.t()) :: :ok | {:error, atom()}
+  def admission(%{"operator_pause" => pause}, _) when not is_nil(pause), do: {:error, :operator_paused}
+
+  def admission(%{"environment_problem" => problem, "cycle" => nil}, _) when not is_nil(problem), do: {:error, :environment_problem}
+
+  def admission(%{"environment_problem" => problem, "cycle" => %{"recovery" => nil}}, _) when not is_nil(problem), do: {:error, :environment_problem}
+
   def admission(%{"status" => "idle", "cycle" => nil}, "new"), do: :ok
 
   def admission(%{"cycle" => %{"task" => %{"item_id" => item}, "phase" => "reserved", "budget" => budget} = cycle}, item) do
@@ -25,12 +32,14 @@ defmodule SymphonyElixir.DeliveryGate.State do
 
   def admission(_, _), do: {:error, :cycle_blocked}
 
+  defp transition(state, "operator_decision", args), do: Decision.apply(state, args)
+
   defp transition(%{"status" => "bootstrap_required", "cycle" => nil} = state, "bootstrap", args) do
     {:ok, %{state | "status" => "idle", "baseline" => validated_proof(args)}}
   end
 
-  defp transition(%{"cycle" => nil} = state, "record_restore", _args), do: {:ok, state}
-  defp transition(state, "record_restore", _args), do: put_cycle(state, uncertain_cycle(state["cycle"]))
+  defp transition(%{"cycle" => nil} = state, "record_restore", _args), do: {:ok, Map.put(state, "baseline", nil)}
+  defp transition(state, "record_restore", _args), do: put_cycle(Map.put(state, "baseline", nil), uncertain_cycle(state["cycle"]))
 
   defp transition(%{"status" => "idle", "cycle" => nil} = state, "reserve", args) do
     if args["sha"] == state["baseline"]["sha"] do

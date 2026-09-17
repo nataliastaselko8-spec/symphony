@@ -252,6 +252,18 @@ defmodule SymphonyElixir.DeliveryGateStateTest do
     assert budget["accounting_uncertain"]
     assert budget["initial_ms"] == 3_600_000
     assert state["cycle"]["block_reason"] == "restored_accounting_requires_operator"
+    assert state["baseline"] == nil
+    assert {:error, :resume_not_allowed} = State.apply_command(state, "resume", Map.put(operator(), "sha", sha()))
+
+    confirmation = %{
+      "kind" => "validate",
+      "actor" => "local:owner",
+      "reason" => "Fresh check after restore",
+      "request_hash" => String.duplicate("a", 64),
+      "data" => Map.put(proof(), "criteria", ["app", "scenario", "services"])
+    }
+
+    state = apply!(state, "operator_decision", confirmation)
     extension = Map.merge(operator(), %{"initial_ms" => 1000, "fix_ms" => 0, "fixes" => 0, "ci_attempts" => 2, "retries_per_sha" => 1})
 
     state =

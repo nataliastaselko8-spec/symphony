@@ -10,6 +10,8 @@ defmodule SymphonyElixir.DeliveryRuntime do
   alias SymphonyElixir.GitHubProjects.Delivery
   alias SymphonyElixir.GitHubProjects.Delivery.Observation
   alias SymphonyElixir.GitHubProjects.Publication
+  alias SymphonyElixir.Operator.{Auth, Decision}
+  alias SymphonyElixir.Operator.Policy, as: OperatorPolicy
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
@@ -53,6 +55,14 @@ defmodule SymphonyElixir.DeliveryRuntime do
   @spec cleanup(GenServer.server(), String.t()) :: :ok | {:error, atom()}
   def cleanup(server, path), do: GenServer.call(server, {:cleanup, path})
 
+  @doc "Trusted controller boundary; never expose this context through HTTP."
+  @spec operator_context(GenServer.server()) :: {:ok, map()} | {:error, atom()}
+  def operator_context(server), do: operator_call(server, :operator_context)
+
+  @spec operator_apply(GenServer.server(), GenServer.server(), String.t(), String.t(), map(), term(), integer()) :: term()
+  def operator_apply(server, auth, session, id, payload, observation, started),
+    do: operator_call(server, {:operator_apply, auth, session, id, payload, observation, started})
+
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
@@ -87,6 +97,47 @@ defmodule SymphonyElixir.DeliveryRuntime do
   end
 
   @impl true
+  def handle_call(:operator_context, _, state) do
+    context = DeliveryGate.status(state.gate)
+
+    value = %{
+      gate: context,
+      config: state.config,
+      settings: state.settings,
+      observation: state.observation,
+      started_at: state.now.(),
+      observe: Keyword.get(state.opts, :observer, &Delivery.observe/2),
+      options: Keyword.put(Keyword.get(state.opts, :observer_options, []), :context, context)
+    }
+
+    {:reply, {:ok, value}, state}
+  end
+
+  def handle_call({:operator_apply, auth, session, id, payload, observation, started}, _, state) do
+    result =
+      with {:ok, actor} <- Auth.check(auth, session),
+           {:ok, form} <- Auth.form(auth, session, id),
+           true <- GenServer.whereis(form.runtime) == self(),
+           true <- actor == form.actor,
+           do: apply_operator(state, form, payload, observation, started),
+           else: (
+             false -> {:error, :operator_form_invalid}
+             error -> error
+           )
+
+    next =
+      case result do
+        {:ok, %{replayed: false, kind: kind}} ->
+          changed = invalidate(state)
+          if Decision.restrictive?(kind), do: stop_worker(changed, :operator_decision), else: changed
+
+        _ ->
+          state
+      end
+
+    {:reply, result, next}
+  end
+
   def handle_call(:status, _from, state) do
     worker = if state.worker, do: Map.take(state.worker, [:item, :interval, :status, :elapsed_ms, :effects]), else: nil
 
@@ -97,7 +148,8 @@ defmodule SymphonyElixir.DeliveryRuntime do
       observation: state.observation,
       observation_age_ms: age(state),
       restart_required: state.restart,
-      execution_enabled: false
+      execution_enabled: false,
+      decisions: DeliveryGate.decisions(state.gate)
     }
 
     {:reply, result, state}
@@ -250,6 +302,9 @@ defmodule SymphonyElixir.DeliveryRuntime do
     :ok
   end
 
+  @impl true
+  def format_status(_), do: %{state: :delivery_runtime_redacted}
+
   defp ready(state, context) do
     cond do
       state.restart -> {:error, :restart_required}
@@ -257,6 +312,55 @@ defmodule SymphonyElixir.DeliveryRuntime do
       state.observation == nil or age(state) >= freshness(state) -> {:error, :observation_required}
       true -> Observation.validate(state.observation, state.settings, context)
     end
+  end
+
+  defp apply_operator(state, form, payload, observation, started) do
+    case DeliveryGate.decision(state.gate, form.id) do
+      nil ->
+        new_operator_decision(state, form, payload, observation, started)
+
+      %{"args" => args} ->
+        if args["request_hash"] == OperatorPolicy.hash(payload) and args["actor"] == form.actor and args["kind"] == form.action,
+          do: {:ok, %{replayed: true, kind: form.action, id: form.id}},
+          else: {:error, :command_id_reused}
+    end
+  end
+
+  defp new_operator_decision(state, form, payload, observation, started) do
+    context = DeliveryGate.status(state.gate)
+
+    with true <- context.version == form.version and state.settings.gate.scope == form.scope and not state.restart,
+         :ok <- operator_observation(state, form, context, observation, started),
+         {:ok, args} <- OperatorPolicy.build(form, payload, observation, state.settings, context.state),
+         {:ok, _} <- DeliveryGate.execute(state.gate, context.version, form.id, "operator_decision", args) do
+      {:ok, %{id: form.id, kind: form.action, replayed: false}}
+    else
+      false -> {:error, :operator_context_changed}
+      error -> error
+    end
+  end
+
+  defp operator_observation(state, form, context, observation, started) do
+    if Decision.restrictive?(form.action) do
+      :ok
+    else
+      with true <- state.worker == nil and state.effect == nil,
+           true <- observation != nil and state.now.() - started < freshness(state),
+           true <- form.stamp != nil and form.stamp == OperatorPolicy.stamp(observation),
+           :ok <- Observation.validate(observation, state.settings, context),
+           :ok <- DeliveryGate.reconcile(state.gate, context.version, state.settings.gate.scope, observation.facts["dev_sha"]),
+           do: :ok,
+           else: (
+             false -> {:error, :operator_context_changed}
+             error -> error
+           )
+    end
+  end
+
+  defp operator_call(server, request) do
+    GenServer.call(server, request, 30_000)
+  catch
+    :exit, _ -> {:error, :delivery_runtime_unavailable}
   end
 
   defp check_current_worker(state, worker, mode) do
@@ -566,6 +670,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
 
   defp effect_paused?(state, context, effect) do
     context.mode not in [:reconciled, :needs_reconciliation] or state.now.() < state.effect_retry_at or
+      (Decision.held?(context.state) and not sent_effect?(effect)) or
       worker_blocks_effect?(state.worker, effect) or (is_nil(state.worker) and state.observation == nil)
   end
 
@@ -743,9 +848,9 @@ defmodule SymphonyElixir.DeliveryRuntime do
   defp refresh_worker_status(state, _, _), do: stop_worker(state, :project_status_requires_reconciliation)
 
   defp effect_current?(%{worker: worker} = state) when not is_nil(worker),
-    do: worker.status == :running and state.now.() < worker.deadline and state.now.() - worker.checked_at < freshness(state)
+    do: not Decision.held?(DeliveryGate.status(state.gate).state) and worker.status == :running and state.now.() < worker.deadline and state.now.() - worker.checked_at < freshness(state)
 
-  defp effect_current?(state), do: state.observation != nil and age(state) < freshness(state)
+  defp effect_current?(state), do: not Decision.held?(DeliveryGate.status(state.gate).state) and state.observation != nil and age(state) < freshness(state)
 
   defp cancel_read(%{read: nil} = state), do: state
 
