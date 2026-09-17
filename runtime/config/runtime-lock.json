@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "runtime_contract": 1,
+  "execution_enabled": false,
+  "platform": "linux-x86_64",
+  "base_image": "docker.io/library/ubuntu@sha256:e5a4d6262ab5dbc25a85e60550dd7c87fd41a74fe43881534ed8288b2a7a3f8d",
+  "codex_version": "0.154.0",
+  "uv_image": "ghcr.io/astral-sh/uv@sha256:0d127b3a7049b879a6e18a79c7f33fea59aa83c226464248f89cfb716a6b96f5",
+  "uv_version": "0.11.32",
+  "task_python": "3.11.15",
+  "minimum_python": "3.11",
+  "minimum_podman": "5.7",
+  "image_user": "10001:10001"
+}

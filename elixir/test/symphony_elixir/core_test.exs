@@ -1148,6 +1148,8 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "stale retry timer messages do not consume newer retry entries" do
+    # A timer-token test must not race a startup poll against the real Linear endpoint.
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
     issue_id = "issue-stale-retry"
     orchestrator_name = Module.concat(__MODULE__, :StaleRetryOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
@@ -1177,7 +1179,6 @@ defmodule SymphonyElixir.CoreTest do
     end)
 
     send(pid, {:retry_issue, issue_id, stale_retry_token})
-    Process.sleep(50)
 
     assert %{
              attempt: 2,

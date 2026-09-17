@@ -32,6 +32,7 @@ test:
 delivery-store-test:
 	python3 -I -B -m unittest discover -s test/python -p 'test_delivery_store.py'
 	python3 -I -B -m unittest discover -s test/python -p 'test_git_publisher.py'
+	python3 -I -B -m unittest discover -s ../runtime/tests -p 'test_*.py'
 
 dialyzer:
 	$(MIX) deps.get

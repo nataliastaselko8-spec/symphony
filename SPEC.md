@@ -1,5 +1,10 @@
 # Symphony Service Specification
 
+> Fork extension: [portable worker runtime](runtime/README.md) defines the explicit
+> Linux/WSL2 rootless-container deployment profile, scoped network guardian and
+> controller-only bundle transport. Its inspection manifest does not enable GitHub
+> Projects execution. Production lifecycle wiring remains a separate rollout step.
+
 Status: Draft v1 (language-agnostic)
 
 Purpose: Define a service that orchestrates coding agents to get project work done.

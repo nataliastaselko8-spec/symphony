@@ -20,8 +20,6 @@ import threading
 import time
 import uuid
 
-USER = "symphony-worker"
-UID = 2002
 PROBE = r"""
 import errno, json, os, socket, sys
 family, address, port = sys.argv[1:]
@@ -47,7 +45,10 @@ def emit(message):
 
 
 class Canary:
-    def __init__(self):
+    def __init__(self, user, distro):
+        self.user = user
+        self.uid = pwd.getpwnam(user).pw_uid
+        self.distro = distro
         self.tools = {}
         self.listeners = []
         self.rules = []
@@ -90,14 +91,14 @@ class Canary:
             raise RuntimeError("Use python3 -I")
         if sys.platform != "linux" or os.geteuid() != 0:
             raise RuntimeError("Linux root is required")
-        if os.environ.get("WSL_DISTRO_NAME") != "Ubuntu-26.04":
-            raise RuntimeError("Expected WSL_DISTRO_NAME=Ubuntu-26.04")
+        if os.environ.get("WSL_DISTRO_NAME") != self.distro:
+            raise RuntimeError("WSL distro does not match --distro")
         if "microsoft" not in os.uname().release.lower():
             raise RuntimeError("Expected the WSL kernel")
         if Path("/proc/1/comm").read_text().strip() != "systemd":
             raise RuntimeError("PID 1 must be systemd")
-        if pwd.getpwnam(USER).pw_uid != UID:
-            raise RuntimeError("Unexpected worker UID")
+        if self.uid == 0:
+            raise RuntimeError("Unprivileged --worker is required")
         if not Path("/sys/fs/cgroup/cgroup.controllers").is_file():
             raise RuntimeError("cgroup v2 is required")
         for name in ("systemd-run", "systemctl", "runuser", "sleep", "modinfo",
@@ -187,7 +188,7 @@ class Canary:
         self.command([
             self.tools["systemd-run"], "--system", "--quiet", "--collect",
             "--unit=" + self.keeper, "--slice=" + self.slice,
-            "--service-type=exec", "--uid=" + USER,
+            "--service-type=exec", "--uid=" + self.user,
             "--property=RuntimeMaxSec=120", "--property=TimeoutStopSec=3",
             self.tools["sleep"], "120",
         ])
@@ -210,16 +211,16 @@ class Canary:
             self.pending_probes.add(unit)
             result = self.command([
                 self.tools["systemd-run"], "--system", "--quiet", "--wait",
-                "--pipe", "--collect", "--service-type=exec", "--uid=" + USER,
+                "--pipe", "--collect", "--service-type=exec", "--uid=" + self.user,
                 "--unit=" + unit, "--slice=" + self.slice,
                 "--property=RuntimeMaxSec=5", "--property=TimeoutStopSec=2",
             ] + argv)
             self.pending_probes.remove(unit)
         else:
-            result = self.command([self.tools["runuser"], "-u", USER, "--"] + argv)
+            result = self.command([self.tools["runuser"], "-u", self.user, "--"] + argv)
         data = json.loads(result.stdout.strip())
         member = data["cgroup"] == self.cg or data["cgroup"].startswith(self.cg + "/")
-        if data["uid"] != UID or member != inside or data["outcome"] != expected:
+        if data["uid"] != self.uid or member != inside or data["outcome"] != expected:
             raise RuntimeError("PROBE_FAILED " + json.dumps(data))
         emit("PASS " + phase + " IPV" + version + (" INSIDE " if inside else " OUTSIDE ")
              + expected)
@@ -301,9 +302,12 @@ def interrupted(signum, _frame):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", action="store_true", help="perform the temporary local canary")
-    if not parser.parse_args().run:
+    parser.add_argument("--worker", required=True)
+    parser.add_argument("--distro", required=True)
+    args = parser.parse_args()
+    if not args.run:
         parser.error("Explicit --run is required")
-    canary = Canary()
+    canary = Canary(args.worker, args.distro)
     passed = False
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, interrupted)

@@ -1,5 +1,10 @@
 # Symphony Elixir
 
+For this fork's portable controller/worker setup, see [runtime/README.md](../runtime/README.md).
+PR-11 provides finite Projects inspection and explicitly constructed `WorkerTransport` callbacks.
+It does not enable Projects execution or install those callbacks in application startup.
+Keep machine configuration, credentials and state outside the source checkout.
+
 This directory contains the current Elixir/OTP implementation of Symphony, based on
 [`SPEC.md`](../SPEC.md) at the repository root.
 

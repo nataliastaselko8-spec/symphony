@@ -3,3 +3,6 @@
 *.exs text eol=lf
 elixir/test/fixtures/status_dashboard_snapshots/* text eol=lf
 .github/pull_request_template.md text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+runtime/** text eol=lf

@@ -1,0 +1,9 @@
+{
+  "package": "/opt/symphony-runtime/ACCEPTED_REVISION",
+  "user": "WORKER_ACCOUNT",
+  "image": "sha256:REPLACE_WITH_BUILT_IMAGE_ID",
+  "root": "/home/WORKER_ACCOUNT/symphony-state",
+  "name": "project-worker",
+  "management_port": 2224,
+  "management_public_key": "ssh-ed25519 REPLACE_WITH_CONTROLLER_PUBLIC_KEY"
+}

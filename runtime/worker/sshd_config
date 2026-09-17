@@ -1,0 +1,23 @@
+Port 2222
+ListenAddress 0.0.0.0
+HostKey /run/worker/host_key
+AuthorizedKeysFile /run/worker/authorized_keys
+PidFile /run/worker/sshd.pid
+UsePAM no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+PermitEmptyPasswords no
+PermitRootLogin no
+AllowUsers worker
+DisableForwarding yes
+PermitTunnel no
+PermitTTY no
+PermitUserEnvironment no
+PermitUserRC no
+StrictModes yes
+PrintMotd no
+PrintLastLog no
+LogLevel ERROR
+SetEnv CODEX_HOME=/codex UV_PYTHON_INSTALL_DIR=/opt/python UV_CACHE_DIR=/tmp/uv-cache
