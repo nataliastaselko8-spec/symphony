@@ -3,6 +3,27 @@ defmodule SymphonyElixir.SSHTest do
 
   alias SymphonyElixir.SSH
 
+  test "login probe is bounded and distinguishes authentication from transport failure" do
+    root = Path.join(System.tmp_dir!(), "symphony-probe-#{System.unique_integer([:positive])}")
+    previous = System.get_env("PATH")
+
+    on_exit(fn ->
+      restore_env("PATH", previous)
+      File.rm_rf(root)
+    end)
+
+    for {script, expected, timeout} <- [
+          {"printf logged-in; exit 0", :ok, 1000},
+          {"exit 1", {:error, :codex_login_required}, 1000},
+          {"exit 255", {:error, :worker_probe_failed}, 1000},
+          {"head -c 9000 /dev/zero", {:error, :worker_probe_failed}, 1000},
+          {"sleep 2", {:error, :worker_probe_timeout}, 20}
+        ] do
+      install_fake_ssh!(root, Path.join(root, "trace"), "#!/bin/sh\n" <> script <> "\n")
+      assert SSH.probe("fixture", "codex login status", timeout) == expected
+    end
+  end
+
   test "run/3 keeps bracketed IPv6 host:port targets intact" do
     test_root = Path.join(System.tmp_dir!(), "symphony-ssh-ipv6-test-#{System.unique_integer([:positive])}")
     trace_file = Path.join(test_root, "ssh.trace")

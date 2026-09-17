@@ -7,6 +7,7 @@ defmodule SymphonyElixir.AgentRunner do
   alias SymphonyElixir.Codex.AppServer
   alias SymphonyElixir.{Config, PromptBuilder, Tracker, Workspace}
   alias SymphonyElixir.DeliveryRuntime.Guard
+  alias SymphonyElixir.Runtime.Worker
   alias SymphonyElixir.Tracker.Issue
 
   @type worker_host :: String.t() | nil
@@ -22,7 +23,17 @@ defmodule SymphonyElixir.AgentRunner do
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
   def run(issue, codex_update_recipient \\ nil, opts \\ []) do
     # The orchestrator owns host retries so one worker lifetime never hops machines.
-    worker_host = selected_worker_host(Keyword.get(opts, :worker_host), Config.settings!().worker.ssh_hosts)
+    worker_host =
+      case Keyword.get(opts, :delivery) do
+        %{isolated: true} = handle ->
+          case Worker.prepare(handle) do
+            {:ok, endpoint} -> endpoint
+            _ -> raise RuntimeError, "Isolated worker startup was not confirmed"
+          end
+
+        _ ->
+          selected_worker_host(Keyword.get(opts, :worker_host), Config.settings!().worker.ssh_hosts)
+      end
 
     Logger.info("Starting agent run for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)}")
 

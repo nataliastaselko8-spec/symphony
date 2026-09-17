@@ -348,7 +348,7 @@ class RuntimeTest(unittest.TestCase):
         executable.parent.mkdir(parents=True)
         executable.write_text("#!/bin/sh\nexec sleep 30\n")
         executable.chmod(0o700)
-        program = "import sys,json;sys.path.insert(0,sys.argv[1]);from symphony_runtime import cli;cli.preflight=lambda c:{'inspection_ready':True};raise SystemExit(cli.launch(json.loads(sys.argv[2])))"
+        program = "import sys,json;sys.path.insert(0,sys.argv[1]);from symphony_runtime import cli;cli.preflight=lambda c,*args:{'inspection_ready':True};raise SystemExit(cli.launch(json.loads(sys.argv[2])))"
         process = subprocess.Popen([sys.executable, "-I", "-B", "-c", program, str(Path(__file__).resolve().parents[1] / "lib"), json.dumps(value)])
         try:
             import time

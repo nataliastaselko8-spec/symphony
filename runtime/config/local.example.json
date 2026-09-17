@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "role": "inspection",
   "profile": "default",
   "runtime_kind": "wsl2-podman",
@@ -13,5 +13,9 @@
   "ssh_config": null,
   "app_key": null,
   "operator_credential": null,
-  "dashboard_port": 4080
+  "dashboard_port": 4080,
+  "pilot_item_ids": [],
+  "retention_days": 7,
+  "disk_minimum_bytes": 5368709120,
+  "disk_warning_bytes": 10737418240
 }

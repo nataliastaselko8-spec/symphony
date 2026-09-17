@@ -104,7 +104,7 @@ GitHub App installation, создание secrets, включение branch rul
 | PR-10 | fork Symphony / `main` | Защищённые operator actions и dashboard для владелицы проекта | PR-07, PR-08, PR-09; WSL2 и единственный оператор подтверждены в O0 |
 | PR-11 | fork Symphony / `main` | Переносимые runtime/setup/preflight/launcher, локальный config, проверенная изоляция | PR-02, PR-03, PR-10; WSL2 выбран для первой приёмки |
 | PR-12 | agent-runner / `main` | EmotionStat WORKFLOW и git hooks | PR-08, PR-09, PR-11 |
-| PR-13 | fork Symphony / `main` | Packaged system acceptance, документация и release pin | PR-04, PR-05, PR-10, PR-11, PR-12 |
+| PR-13 | fork Symphony / `main`; минимальный companion agent-runner | Интеграция worker startup/lifecycle, packaged acceptance и точные pins | PR-04, PR-05, PR-10, PR-11, PR-12 |
 | PR-14 | app / `dev` | Одна выбранная пилотная задача и полный dev-цикл | PR-13; O2–O8 завершены |
 | PR-15 | knowledge-base / `main` | Отложенный объём PR-01, фактические решения и результаты пилота | PR-14 и O9 либо зафиксированная остановка пилота |
 
@@ -467,18 +467,25 @@ deployment/artifact/policy; до validation свидетельство дейс�
 
 **Явные зависимости PR-13:** согласовать `/workspace/repo` transport с `<workspace.root>/<issue-key>` обычного lifecycle; связать новый seed с expected dev при сохранении task base; проверить profile/image pins; добавить типизированный локальный pilot filter; подключить callbacks, heartbeat и Codex login. PR-12 не маскирует эти разрывы symlink или вторым checkout.
 
-### PR-13 — Проверить упакованную систему и зафиксировать pin
+### PR-13 — Подключить изолированный runtime и проверить упакованную систему
 
-**Repo/base:** `nataliastaselko8-spec/symphony` → `main`. **Title:** `Verify the packaged GitHub Projects runner lifecycle`.
+**Repo/base:** `nataliastaselko8-spec/symphony` → `main`. **Title:** `Integrate the isolated GitHub Projects execution lifecycle`.
 
-**Цель / было → станет:** отдельно проверенные компоненты проходят один воспроизводимый сценарий в выбранной упаковке, с опубликованным контрактом версии для runner.
+**Подробный план для валидации:** [PR13 — интеграция, последовательность изменений, проверки и приёмка](github_projects_setup/pr13-execution-plan.md). План подготовлен; реализация PR13 не начата.
 
-**Объём и файлы:** system/packaging tests и существующий live test harness; `elixir/README.md`, `WORKFLOW.md` example, нужные разделы `SPEC.md`, runbook и release metadata по правилам repo. Без реальной продуктовой задачи в обычном тесте.
+**Цель / было → станет:** отдельно проверенные компоненты соединяются в рабочий startup/lifecycle и проходят один воспроизводимый сценарий в выбранной упаковке. Это кодовая интеграция, а не только снятие inspection guard и повтор тестов.
+
+**Объём и файлы:** общий runtime config/launcher/transport, startup и supervisor, lifecycle/workspace/SSH bindings, operator readiness, system/packaging tests; `elixir/README.md`, WORKFLOW examples, нужные разделы `SPEC.md`, runbook и version manifest. Минимальный companion в `agent-runner` обновляет template/pilot parameter, profile checks и совместимые pins. App и knowledge-base не меняются; реальная продуктовая задача остаётся PR14.
 
 - Проверить запускаемый артефакт выбранного runtime, finite dry-run и все startup paths. Для Burrito учитывать CLI-routing application callback, не требуя невозможного «application callback никогда не вызывался».
 - Проверить согласованный в PR-11/PR-12 deployment manifest: Symphony commit/artifact digest, agent-runner revision и версия конфигурации. После merge этого PR оператор в O7 создаёт локальный deployment manifest вне git с точными итоговыми ревизиями и digest; это устраняет невозможность записать в PR хеш собственного будущего merge. Начальный pin PR-11/PR-12 остаётся пригодным только для инспекции. Launcher не включает исполнение без проверенного итогового manifest и не подменяет его moving branch.
 - Обычный запуск github_projects разрешить только при наличии всей интеграции, корректного gate/store, manual operator path и профиля. Незавершённые ранние сборки остаются inspection-only.
 - Закрыть конкретные точки интеграции из [плана PR-12, §13](github_projects_setup/pr12-execution-plan.md#13-явные-точки-интеграции-pr-13): единый подготовленный cwd для lifecycle/hooks/Codex/export, принятый project image, fresh-dev seed для continuation, явный типизированный pilot filter и callbacks/heartbeat. Файл шаблона сам по себе этого не обеспечивает.
+- Разделить готовность controller/дашборда и допуск задачи; обеспечить первоначальную ручную проверку dev при закрытой очереди. Пустой pilot filter не допускает работы. Завершение одного пилота сохраняется в durable state и не обходится перезапуском launcher.
+- Подключить prepare/start/status/heartbeat/stop/export с binding cycle/interval/generation и восстановлением неизвестных результатов через readback. Stop launcher и завершение Elixir task не заменяют подтверждения остановки контейнера/потомков. Долгие операции не блокируют обработку status/cancel.
+- Проверить отдельный Codex login/auth lifecycle, передачу App metadata только controller и реальную host/network readiness. Персональные WSL/accounts/paths остаются в local config; default установки — inspection.
+- Получать `model/list` после входа; оператор отдельно выбирает модель и reasoning effort. Пара хранится локально, закрепляется за циклом, явно передаётся в каждую сессию/turn и подтверждается app-server. Дашборд различает выбранное и подтверждённое; отсутствие/недоступность закрывают допуск без fallback. Усиление не меняет права и бюджеты.
+- Сохранять незавершённые, отменённые и аварийные workspaces; успешно завершённые тяжёлые данные очищать после retention (по умолчанию 7 дней), итоговые отчёты отдельно. Ограничить журналы и очистку образов областью установки; контролировать свободный диск до и во время работы.
 
 **Зависимости:** PR-04, PR-05, PR-10, PR-11, PR-12. Тесты каждого изменения уже прошли в своих PR.
 

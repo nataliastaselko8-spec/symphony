@@ -20,12 +20,14 @@ retains publication intent, confines Git writes to the task branch and waits for
 A local [operator dashboard](elixir/docs/operator_dashboard.md) authenticates the owner and
 records version-bound validation, pause, cancellation and recovery decisions in the same store.
 It also records manual Queue/Scheduler readiness separately from deployment and application validation.
-An isolated demo is available; Projects-based agent execution is not enabled yet.
+An isolated demo is available. Projects execution requires explicit local activation of the accepted runtime.
 
 The fork includes a [portable worker runtime](runtime/README.md): local configuration,
 read-only inspection, a rootless Podman worker, scoped network controls, verified stop
 and credential-free Git bundle transfer. Machine paths and WSL accounts are configured
-outside the checkout. Production Projects execution still requires the later startup integration.
+outside the checkout. The controller connects the worker lifecycle and permits one selected pilot;
+inspection remains the default. Model and reasoning effort are selected locally and pinned per cycle.
+See the [execution guide](elixir/docs/github_projects_setup/pr13-runtime-guide.md).
 
 ## Running Symphony
 

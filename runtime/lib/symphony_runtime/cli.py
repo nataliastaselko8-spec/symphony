@@ -1,4 +1,4 @@
-"""Finite inspection launcher. Runtime execution cannot be enabled by editing JSON."""
+"""Explicit pinned controller launch, finite inspection, and confirmed shutdown."""
 import argparse
 import json
 import os
@@ -16,13 +16,13 @@ from . import config as settings
 from .common import Rejected, atomic, canonical, command, digest, locked, no_links, private_dir, private_file, read_json, require
 
 
-def preflight(config):
+def preflight(config, execute=False):
     checks = []
     def check(name, action):
         try:
             action()
             checks.append({"check": name, "status": "PASS"})
-        except (Rejected, OSError, ValueError) as error:
+        except (Rejected, OSError, ValueError, TypeError) as error:
             checks.append({"check": name, "status": "NOT_READY", "reason": str(error) if isinstance(error, Rejected) else "missing_or_unreadable_resource"})
     check("linux", lambda: require(sys.platform == "linux", "linux_required"))
     for tool in ("git", "ssh", "python3", "prlimit"):
@@ -34,10 +34,20 @@ def preflight(config):
     for field in ("ssh_config", "app_key", "operator_credential"):
         if config[field]:
             check(field + "_permissions", lambda field=field: private_file(config[field]))
-    checks.append({"check": "live_execution", "status": "BLOCKED", "reason": "PR13_integration_required"})
-    checks.append({"check": "worker_acceptance", "status": "NOT_EVALUATED", "reason": "run_explicit_runtime_smoke"})
-    return {"schema_version": 1, "profile": config["profile"], "role": config["role"], "execution_enabled": False,
-            "inspection_ready": all(row["status"] == "PASS" for row in checks[:-2]), "checks": checks}
+    inspection_ready = all(row["status"] == "PASS" for row in checks)
+    worker = None
+    if execute:
+        check("controller_role", lambda: require(config["role"] == "controller" and settings.validate_manifest(config)["mode"] == "controller", "explicit_controller_pin_required"))
+        for field in ("ssh_config", "app_key", "operator_credential"):
+            check(field + "_required", lambda field=field: private_file(config[field]))
+        try:
+            from .controller import Controller
+            worker = Controller(config).ready()
+        except (Rejected, OSError, ValueError, TypeError):
+            worker = {"ready": False, "reasons": ["worker_unavailable"]}
+    return {"schema_version": 2, "profile": config["profile"], "role": config["role"], "execution_enabled": False,
+            "inspection_ready": inspection_ready, "controller_ready": execute and all(row["status"] == "PASS" for row in checks),
+            "worker": worker, "checks": checks}
 
 
 def verify_source(config):
@@ -49,11 +59,16 @@ def verify_source(config):
     profile = Path(config["project_template"]).parent
     require(command(["git", "rev-parse", "HEAD"], cwd=profile).decode().strip() == manifest["profile_revision"], "profile_pin_mismatch")
     require(not command(["git", "status", "--porcelain", "--untracked-files=normal"], cwd=profile).strip(), "profile_checkout_dirty")
+    if manifest["mode"] == "controller":
+        lock = read_json(no_links(profile / "worker/profile-lock.json"))
+        require(lock.get("runtime_contract") == 2 and lock.get("profile_contract") == 1, "profile_runtime_incompatible")
+        require(lock.get("symphony_commit") == manifest["symphony_commit"], "profile_symphony_pin_mismatch")
 
 
-def launch(config, delivery=False):
+def launch(config, delivery=False, *, execute=False, config_path=None):
     require(sys.platform == "linux", "linux_required")
-    require(preflight(config)["inspection_ready"], "inspection_preflight_failed")
+    report = preflight(config, execute)
+    require(report["controller_ready"] if execute else report["inspection_ready"], "launch_preflight_failed")
     state = private_dir(config["state_root"])
     with locked(state / "launcher.lock"):
         # The fixed CLI entry point owns its temporary read credential cache.
@@ -64,6 +79,13 @@ def launch(config, delivery=False):
             env["SYMPHONY_SSH_CONFIG"] = config["ssh_config"]
         if config["app_key"]:
             env["SYMPHONY_GITHUB_APP_PRIVATE_KEY_PATH"] = config["app_key"]
+        for name in ("SYMPHONY_GITHUB_APP_ID", "SYMPHONY_GITHUB_APP_CLIENT_ID", "SYMPHONY_GITHUB_INSTALLATION_ID"):
+            if name in os.environ:
+                env[name] = os.environ[name]
+        if execute:
+            require(config_path is not None, "configuration_path_required")
+            env["SYMPHONY_RUNTIME_CONFIG"] = str(Path(config_path).absolute())
+            env["SYMPHONY_RUNTIME_HELPER"] = str(Path(config["symphony_root"]) / "runtime/scripts/controller.py")
         proc = None
         stop = threading.Event()
         token = uuid.uuid4().hex
@@ -76,13 +98,18 @@ def launch(config, delivery=False):
         endpoint.chmod(0o600)
         server.listen(4)
         server.settimeout(0.2)
-        record = {"pid": os.getpid(), "start": Path("/proc/self/stat").read_text().split(") ", 1)[1].split()[19], "mode": "inspection", "token": token}
+        record = {"pid": os.getpid(), "start": Path("/proc/self/stat").read_text().split(") ", 1)[1].split()[19], "mode": "controller" if execute else "inspection", "token": token}
         atomic(state / "launcher.json", canonical(record))
         previous = signal.signal(signal.SIGTERM, lambda *_: stop.set())
         try:
-            proc = subprocess.Popen([str(executable), "--dry-run", config["workflow"]],
+            args = ["--i-understand-that-this-will-be-running-without-the-usual-guardrails", "--logs-root", str(state)] if execute else ["--dry-run"]
+            proc = subprocess.Popen([str(executable), *args, config["workflow"]],
                                     cwd=executable.parent.parent, env=env, stdin=subprocess.DEVNULL, start_new_session=True)
             while proc.poll() is None and not stop.is_set():
+                if execute and (state / "shutdown.ack").exists():
+                    ack = read_json(private_file(state / "shutdown.ack"))
+                    if ack.get("token") == token and ack.get("pilot_finished") is True:
+                        stop.set()
                 try:
                     connection, _ = server.accept()
                     with connection:
@@ -98,6 +125,14 @@ def launch(config, delivery=False):
             stop.set()
         finally:
             signal.signal(signal.SIGTERM, previous)
+            if execute:
+                atomic(state / "shutdown.request", canonical({"token": token}))
+                deadline = time.monotonic() + 105
+                while proc is not None and proc.poll() is None and time.monotonic() < deadline:
+                    ack = state / "shutdown.ack"
+                    if ack.exists() and read_json(private_file(ack)).get("token") == token:
+                        break
+                    time.sleep(0.2)
             if proc is not None and proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGTERM)
                 try:
@@ -105,31 +140,62 @@ def launch(config, delivery=False):
                 except subprocess.TimeoutExpired:
                     os.killpg(proc.pid, signal.SIGKILL)
                     proc.wait()
+            if execute:
+                outcome = confirm_shutdown(config)
+                atomic(state / "last_shutdown.json", canonical(outcome))
             server.close()
             endpoint.unlink(missing_ok=True)
             (state / "launcher.json").unlink(missing_ok=True)
-        return proc.returncode
+        return 0 if execute and outcome["stopped"] else 1 if execute else proc.returncode
 
 
 def status(config):
     path = private_dir(config["state_root"]) / "launcher.json"
     if not path.exists():
-        return {"running": False, "execution_enabled": False}
+        result = {"running": False, "execution_enabled": False}
+        prior = Path(config["state_root"]) / "last_shutdown.json"
+        if prior.exists():
+            result["last_shutdown"] = read_json(private_file(prior))
+        return result
     record = read_json(private_file(path))
-    require(set(record) == {"pid", "start", "mode", "token"} and type(record["pid"]) is int and record["pid"] > 1 and record["mode"] == "inspection", "invalid_launcher_record")
+    require(set(record) == {"pid", "start", "mode", "token"} and type(record["pid"]) is int and record["pid"] > 1 and record["mode"] in ("inspection", "controller"), "invalid_launcher_record")
     try:
         process = Path(f"/proc/{record['pid']}")
         current = process.joinpath("stat").read_text().split(") ", 1)[1].split()[19]
         active = current == record["start"] and process.stat().st_uid == os.getuid()
     except (FileNotFoundError, ProcessLookupError):
         active = False
-    return {"running": active, "execution_enabled": False, "mode": record["mode"], "pid": record["pid"]}
+    return {"running": active, "execution_enabled": active and record["mode"] == "controller", "mode": record["mode"], "pid": record["pid"]}
+
+
+def confirm_shutdown(config):
+    from .controller import Controller
+    try:
+        proof = Controller(config).recover()
+        stopped = proof["phase"] in ("idle", "stopped", "exported") and "worker_ownership_unknown" not in proof["reasons"]
+        return {"stopped": stopped, "workspace_preserved": True}
+    except (Rejected, OSError, ValueError):
+        return {"stopped": False, "reason": "worker_stop_unconfirmed", "workspace_preserved": True}
+
+
+def status_report(config):
+    result = status(config)
+    if config["role"] == "controller":
+        from .controller import Controller
+        try:
+            controller = Controller(config)
+            result["worker"] = controller.ready()
+            record = controller.current()
+            result["task"] = {key: record[key] for key in ("cycle", "interval", "branch")} if record else None
+        except (Rejected, OSError, ValueError, KeyError, TypeError):
+            result["worker"] = {"ready": False, "reasons": ["worker_unavailable"]}
+    return result
 
 
 def stop_inspection(config):
     state = private_dir(config["state_root"])
     if not status(config)["running"]:
-        return {"stopped": True, "workspace_preserved": True}
+        return status(config).get("last_shutdown", {"stopped": True, "workspace_preserved": True})
     record = read_json(private_file(state / "launcher.json"))
     endpoint = no_links(state / "launcher.sock")
     require(endpoint.is_socket() and endpoint.stat().st_uid == os.getuid(), "launcher_control_unavailable")
@@ -138,25 +204,30 @@ def stop_inspection(config):
         connection.connect(str(endpoint))
         connection.sendall(("STOP " + record["token"]).encode())
         require(connection.recv(16) == b"OK", "stop_not_acknowledged")
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + (220 if record["mode"] == "controller" else 15)
     while status(config)["running"] and time.monotonic() < deadline:
         time.sleep(0.1)
     require(not status(config)["running"], "stop_unconfirmed")
-    return {"stopped": True, "workspace_preserved": True}
+    return status(config).get("last_shutdown", {"stopped": True, "workspace_preserved": True})
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("configure", "render", "pin", "preflight", "launch", "status", "stop"))
+    parser.add_argument("action", choices=("configure", "render", "pin", "preflight", "launch", "status", "stop", "login", "cleanup", "models", "select-model"))
     parser.add_argument("--config", default=str(settings.default_config_path()))
     parser.add_argument("--from-json", help="Explicit machine parameters; no shell expressions")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--symphony-commit")
     parser.add_argument("--profile-revision")
     parser.add_argument("--worker-image")
+    parser.add_argument("--model")
+    parser.add_argument("--effort")
+    parser.add_argument("--apply", action="store_true", help="Delete only successfully completed data past retention")
     args = parser.parse_args(argv)
     try:
-        require(not args.execute, "PR13_execution_integration_required")
+        require(not args.execute or args.action in ("launch", "pin", "preflight"), "execute_only_for_activation")
+        require(not args.apply or args.action == "cleanup", "apply_only_for_cleanup")
+        require((args.model is None and args.effort is None) or args.action == "select-model", "model_options_only_for_selection")
         if args.action == "configure":
             values = read_json(args.from_json) if args.from_json else {}
             value = settings.configure(args.config, values)
@@ -167,15 +238,24 @@ def main(argv=None):
         if args.action == "render":
             print(json.dumps({"workflow_sha256": settings.render(config)}))
         elif args.action == "pin":
-            print(json.dumps(settings.pin(config, args.symphony_commit, args.profile_revision, args.worker_image)))
+            print(json.dumps(settings.pin(config, args.symphony_commit, args.profile_revision, args.worker_image, execute=args.execute)))
         elif args.action == "preflight":
-            report = preflight(config)
+            report = preflight(config, args.execute)
             print(json.dumps(report, indent=2))
             return 0 if report["inspection_ready"] else 2
         elif args.action == "launch":
-            return launch(config)
+            return launch(config, execute=args.execute, config_path=args.config)
         elif args.action == "status":
-            print(json.dumps(status(config)))
+            print(json.dumps(status_report(config)))
+        elif args.action in ("login", "models"):
+            from .maintenance import login
+            print(json.dumps(login(config, discover=args.action == "models")))
+        elif args.action == "select-model":
+            from .maintenance import select_model
+            print(json.dumps(select_model(config, args.model, args.effort)))
+        elif args.action == "cleanup":
+            from .maintenance import cleanup
+            print(json.dumps(cleanup(config, apply=args.apply)))
         else:
             print(json.dumps(stop_inspection(config)))
         return 0

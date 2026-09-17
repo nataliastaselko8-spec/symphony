@@ -1,16 +1,46 @@
 defmodule SymphonyElixir.SSH do
   @moduledoc false
+  alias SymphonyElixir.Runtime.Worker
 
   @spec run(String.t(), String.t(), keyword()) :: {:ok, {String.t(), non_neg_integer()}} | {:error, term()}
   def run(host, command, opts \\ []) when is_binary(host) and is_binary(command) do
-    with {:ok, executable} <- ssh_executable() do
-      {:ok, System.cmd(executable, ssh_args(host, command), opts)}
+    with {:ok, executable} <- ssh_executable(), {:ok, args} <- ssh_args(host, command) do
+      {:ok, System.cmd(executable, args, opts)}
+    end
+  end
+
+  @spec probe(String.t(), String.t(), pos_integer()) :: :ok | {:error, atom()}
+  def probe(host, command, timeout) do
+    with {:ok, port} <- start_port(host, command) do
+      try do
+        probe_reply(port, System.monotonic_time(:millisecond) + timeout, 0)
+      after
+        if Port.info(port), do: Port.close(port)
+      end
+    end
+  end
+
+  defp probe_reply(port, deadline, bytes) do
+    receive do
+      {^port, {:data, data}} when bytes + byte_size(data) <= 8192 ->
+        probe_reply(port, deadline, bytes + byte_size(data))
+
+      {^port, {:exit_status, 0}} ->
+        :ok
+
+      {^port, {:exit_status, 1}} ->
+        {:error, :codex_login_required}
+
+      {^port, _} ->
+        {:error, :worker_probe_failed}
+    after
+      max(deadline - System.monotonic_time(:millisecond), 0) -> {:error, :worker_probe_timeout}
     end
   end
 
   @spec start_port(String.t(), String.t(), keyword()) :: {:ok, port()} | {:error, term()}
   def start_port(host, command, opts \\ []) when is_binary(host) and is_binary(command) do
-    with {:ok, executable} <- ssh_executable() do
+    with {:ok, executable} <- ssh_executable(), {:ok, args} <- ssh_args(host, command) do
       line_bytes = Keyword.get(opts, :line)
 
       port_opts =
@@ -18,7 +48,7 @@ defmodule SymphonyElixir.SSH do
           :binary,
           :exit_status,
           :stderr_to_stdout,
-          args: Enum.map(ssh_args(host, command), &String.to_charlist/1)
+          args: Enum.map(args, &String.to_charlist/1)
         ]
         |> maybe_put_line_option(line_bytes)
 
@@ -38,6 +68,14 @@ defmodule SymphonyElixir.SSH do
     end
   end
 
+  defp ssh_args("symphony-task-" <> _ = host, command) do
+    with {:ok, config} <- Worker.endpoint(host) do
+      {:ok, ["-F", config, "-T", "-oBatchMode=yes", "-oIdentitiesOnly=yes", "-oStrictHostKeyChecking=yes", "-oClearAllForwardings=yes", host, remote_shell_command(command)]}
+    end
+  catch
+    :exit, _ -> {:error, :isolated_worker_unavailable}
+  end
+
   defp ssh_args(host, command) do
     %{destination: destination, port: port} = parse_target(host)
 
@@ -46,6 +84,7 @@ defmodule SymphonyElixir.SSH do
     |> Kernel.++(["-T"])
     |> maybe_put_port(port)
     |> Kernel.++([destination, remote_shell_command(command)])
+    |> then(&{:ok, &1})
   end
 
   defp maybe_put_line_option(port_opts, nil), do: port_opts

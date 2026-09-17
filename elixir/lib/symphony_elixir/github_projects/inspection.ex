@@ -6,6 +6,7 @@ defmodule SymphonyElixir.GitHubProjects.Inspection do
   alias SymphonyElixir.{Config, Config.Schema, Workflow}
   alias SymphonyElixir.GitHub.Credentials.Cache
   alias SymphonyElixir.GitHubProjects.Client
+  alias SymphonyElixir.Runtime.Activation
 
   @spec run(Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def run(path, opts \\ []) do
@@ -23,7 +24,7 @@ defmodule SymphonyElixir.GitHubProjects.Inspection do
   def validate_runtime_workflow(path \\ Workflow.workflow_file_path()) do
     case Workflow.load(path) do
       {:ok, %{config: %{"tracker" => %{"kind" => "github_projects"}}}} ->
-        {:error, :github_projects_execution_disabled}
+        Activation.validate_workflow(path)
 
       _ ->
         :ok
@@ -32,8 +33,8 @@ defmodule SymphonyElixir.GitHubProjects.Inspection do
 
   @doc false
   @spec validate_runtime_settings(Schema.t()) :: :ok | {:error, :github_projects_execution_disabled}
-  def validate_runtime_settings(%{tracker: %{kind: "github_projects"}}),
-    do: {:error, :github_projects_execution_disabled}
+  def validate_runtime_settings(%{tracker: %{kind: "github_projects"}} = settings),
+    do: Activation.validate_settings(settings)
 
   def validate_runtime_settings(_settings), do: :ok
 

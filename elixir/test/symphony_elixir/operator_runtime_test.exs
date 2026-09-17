@@ -121,6 +121,9 @@ defmodule SymphonyElixir.OperatorRuntimeTest do
       do: status,
       else:
         (
+          # The fixture clock is stationary. An initial read may have captured
+          # older facts before refresh; explicitly request the next settled read.
+          DeliveryRuntime.refresh(runtime)
           Process.sleep(10)
           wait_queue(runtime, attempts - 1)
         )

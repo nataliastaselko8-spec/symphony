@@ -74,11 +74,13 @@ defmodule SymphonyElixir.Operator.View do
     reason = get_in(state, ["cycle", "block_reason"]) || hold_reason(state, status.reason)
     repo = facts["repo"]
     pr = facts["pr"] || %{}
+    enabled = Map.get(status, :execution_enabled, false)
+    runtime = Map.get(status, :runtime_readiness, %{ready: false, reasons: []})
 
     %{
       available: true,
       phase: phase(cycle),
-      queue: if(state["operator_pause"], do: "Пауза оператора", else: "Запуск задач пока отключён"),
+      queue: queue_state(state["operator_pause"], enabled, runtime),
       cycle_id: get_in(state, ["cycle", "id"]),
       task: get_in(state, ["cycle", "task", "item_id"]),
       owner: get_in(state, ["cycle", "owner", "item_id"]),
@@ -96,17 +98,44 @@ defmodule SymphonyElixir.Operator.View do
       ci: Map.take(facts["ci"] || %{}, ~w(result run_id run_attempt sha failure_kind)),
       observed_at: observation && observation.observed_at,
       age_ms: status.observation_age_ms,
-      reason: current_reason(state, observation, reason),
+      reason: runtime_reason(enabled, state, observation, reason),
+      storage: Map.get(runtime, :storage, %{}),
+      model_selection: model_selection(Map.get(runtime, :model, %{})),
       readiness: readiness(deployment, facts["manual_queue_confirmation"]),
       validation: validation(cycle, state),
       budget: budget(cycle),
       actions: actions(status),
       decisions: Enum.map(Map.get(status, :decisions, []), &decision/1),
-      execution_enabled: false
+      execution_enabled: enabled
     }
   end
 
   def project(_), do: unavailable("Controller недоступен. Действия временно запрещены.")
+
+  defp queue_state(pause, _, _) when not is_nil(pause), do: "Пауза оператора"
+  defp queue_state(_, false, _), do: "Запуск задач пока отключён"
+  defp queue_state(_, _, %{ready: false, reasons: reasons}), do: "Допуск закрыт: " <> message(reasons)
+  defp queue_state(_, _, _), do: "Controller запущен; допуск определяется delivery gate"
+
+  defp model_selection(value) when is_map(value) do
+    Map.new(~w(selected applied), fn key ->
+      pair = Map.get(value, key)
+      {key, if(is_map(pair), do: Map.take(pair, ~w(model effort)), else: nil)}
+    end)
+  end
+
+  defp model_selection(_), do: %{}
+
+  defp runtime_reason(true, _, _, nil), do: "Проверяем условия допуска"
+
+  defp runtime_reason(true, state, observation, reason) do
+    case current_reason(state, observation, reason) do
+      "База dev подтверждена. Исполнение задач пока отключено." -> "База dev подтверждена. Проверяем допуск выбранной задачи."
+      other -> other
+    end
+  end
+
+  defp runtime_reason(_, state, observation, reason), do: current_reason(state, observation, reason)
 
   defp hold_reason(state, reason), do: if(Decision.held?(state), do: "operator_hold", else: reason)
   defp phase(nil), do: "Нет активной задачи"
@@ -143,6 +172,25 @@ defmodule SymphonyElixir.Operator.View do
   def message("resume_queue_before_dev_validation"), do: "Деплой выполнен. Проверьте снятие паузы Queue и Scheduler в Cloudflare, затем подтвердите состояние Queue."
   def message("manual_dev_validation_required"), do: "Нужна ручная проверка dev"
   def message("operator_hold"), do: "Сохранена операторская пауза или сообщение о проблеме"
+  def message("disk_space_low"), do: "Недостаточно места. Рабочие данные сохранены, новые задачи заблокированы."
+  def message("codex_login_required"), do: "Нужен отдельный вход Codex на worker: runtime login."
+  def message("model_selection_required"), do: "Выберите модель и усиление: runtime models, затем runtime select-model."
+  def message("model_catalog_required"), do: "Получите список моделей и уровней рассуждений: runtime models."
+  def message("model_catalog_refresh_required"), do: "Обновите список доступных моделей: остановите controller и выполните runtime models."
+  def message("model_catalog_unavailable"), do: "Codex не подтвердил доступные модели. Задача не отправлена."
+  def message("selected_model_unavailable"), do: "Выбранная модель недоступна. Автоматическая замена запрещена."
+  def message("selected_effort_unavailable"), do: "Выбранный уровень рассуждений недоступен для этой модели."
+  def message("model_application_mismatch"), do: "Codex не подтвердил выбранную модель и усиление. Задача не отправлена."
+  def message("codex_model_rerouted"), do: "Codex сообщил о перенаправлении на другую модель. Работа остановлена, нужно решение оператора."
+  def message("cycle_model_selection_changed"), do: "Модель или усиление отличаются от сохранённых для этой задачи. Восстановите прежнюю пару."
+  def message("worker_runtime_unavailable"), do: "Нет подтверждения готовности изолированного worker."
+  def message("worker_network_not_ready"), do: "Сетевая изоляция worker не подтверждена."
+  def message("worker_reconciliation_required"), do: "Проверяем остановку прежнего worker."
+  def message("worker_ownership_unknown"), do: "Привязка worker неизвестна; требуется проверка оператора."
+  def message("worker_profile_mismatch"), do: "Образ worker не соответствует принятой ревизии проектного профиля."
+  def message("worker_probe_failed"), do: "Подключение к Codex на worker не подтверждено. Проверьте runtime перед продолжением."
+  def message("pilot_not_selected"), do: "Пилотная карточка не выбрана; запуск запрещён."
+  def message("pilot_finished"), do: "Пилот завершён. Новый цикл автоматически не запускается."
   def message(reason) when is_atom(reason), do: reason |> Atom.to_string() |> message()
   def message(reason) when is_binary(reason), do: String.slice(reason, 0, 160)
   def message(_), do: "Нужно решение оператора"

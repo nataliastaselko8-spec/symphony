@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Workspace do
   require Logger
   alias SymphonyElixir.{Config, PathSafety, SSH}
   alias SymphonyElixir.DeliveryRuntime.Guard
+  alias SymphonyElixir.Runtime.Worker
 
   @remote_workspace_marker "__SYMPHONY_WORKSPACE__"
 
@@ -14,6 +15,25 @@ defmodule SymphonyElixir.Workspace do
   @spec create_for_issue(map() | String.t() | nil, worker_host(), keyword()) ::
           {:ok, Path.t()} | {:error, term()}
   def create_for_issue(issue_or_identifier, worker_host \\ nil, opts \\ []) do
+    case Keyword.get(opts, :delivery) do
+      %{isolated: true} = handle ->
+        isolated_workspace(issue_or_identifier, worker_host, handle)
+
+      _ ->
+        create_ordinary_workspace(issue_or_identifier, worker_host, opts)
+    end
+  end
+
+  defp isolated_workspace(issue, host, handle) do
+    context = Map.put(issue_context(issue), :delivery, handle)
+
+    with :ok <- Guard.check(handle, :effect),
+         {:ok, workspace} <- Worker.workspace(handle, host),
+         :ok <- maybe_run_after_create_hook(workspace, context, handle.context["mode"] == "new", host),
+         do: {:ok, workspace}
+  end
+
+  defp create_ordinary_workspace(issue_or_identifier, worker_host, opts) do
     issue_context = Map.put(issue_context(issue_or_identifier), :delivery, Keyword.get(opts, :delivery))
 
     try do

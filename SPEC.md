@@ -3,7 +3,9 @@
 > Fork extension: [portable worker runtime](runtime/README.md) defines the explicit
 > Linux/WSL2 rootless-container deployment profile, scoped network guardian and
 > controller-only bundle transport. Its inspection manifest does not enable GitHub
-> Projects execution. Production lifecycle wiring remains a separate rollout step.
+> Projects execution. An explicit v2 activation lease connects the isolated worker
+> lifecycle for one selected pilot; model and reasoning effort are pinned per cycle.
+> See the [runtime execution contract](elixir/docs/github_projects_setup/pr13-runtime-guide.md).
 
 Status: Draft v1 (language-agnostic)
 

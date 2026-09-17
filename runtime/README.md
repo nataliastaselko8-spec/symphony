@@ -1,9 +1,11 @@
-# Переносимая среда Symphony — PR-11
+# Переносимая среда Symphony
 
 Этот каталог поставляется вместе с fork. Он содержит образ изолированного worker,
 ограниченный транспорт, остановку и предварительную диагностику. Рабочий профиль
-EmotionStat поставляется отдельно в agent-runner (PR-12); подключение к обычному startup — в PR-13.
-`launch --execute` сейчас всегда отказывает. Реальные задачи Project не запускаются.
+EmotionStat поставляется отдельно в agent-runner. PR13 подключает runtime к startup
+и delivery cycle. По умолчанию действует inspection; `launch --execute` требует
+явно принятого manifest v2 и живой привязки launcher. Подробные команды запуска,
+выбора модели/усиления и очистки — в [руководстве PR13](../elixir/docs/github_projects_setup/pr13-runtime-guide.md).
 
 Для профиля PR-12 нужен также companion fix передачи больших Git bundles:
 управляющий транспорт дописывает фрейм целиком при частичной записи в сокет.
@@ -39,8 +41,9 @@ state/keys, сокеты Docker/Podman, SSH agent или GitHub-токен. `/us
 Ограничения: capabilities отключены, `no-new-privileges`, seccomp Podman,
 частные PID/IPC/mount/network namespaces, 2 CPU, 2 GiB, 512 процессов,
 256 MiB `/tmp`, 64 MiB временный home, 256 MiB на отдельный создаваемый файл.
-Task volume сохраняется; его общий размер этим лимитом не ограничен. Свободное место
-необходимо контролировать на worker host. Изменение профиля ресурсов требует повторной приёмки.
+Task volume сохраняется; его общий размер этим лимитом не ограничен. Controller проверяет
+свободное место перед работой и при heartbeat; ниже локального порога закрывает допуск
+и останавливает активный worker с сохранением данных. Изменение профиля ресурсов требует повторной приёмки.
 Предел файла повышен со 128 до 256 MiB по решению владелицы при приёмке PR12:
 бинарник workerd требует около 144 MiB. Предел Git bundle остаётся 80 MiB.
 
@@ -105,7 +108,9 @@ SHA обоих checkout, отсутствие изменений, доступн
 dashboard. Вход GitHub App выполняется имеющимся credential provider controller.
 `status` проверяет владельца процесса и время его создания; `stop` обращается к приватному
 сокету launcher, который завершает собственного потомка. Устаревший PID не используется
-для `kill`. Ctrl+C также завершает инспекцию. Все workspaces сохраняются.
+для `kill`. В исполнительном режиме Ctrl+C/stop сначала отзывает допуск и отдельно
+подтверждает остановку контейнера/потомков. `last_shutdown.json` сообщает результат;
+`stopped: false` требует проверки оператора. Незавершённые workspaces сохраняются.
 
 Для изменения принятого профиля создайте новый локальный config с отдельными путями
 WORKFLOW/manifest. Не удаляйте и не обнуляйте delivery store действующего controller.
@@ -209,15 +214,16 @@ rules/каталог `/run/symphony-runtime/<name>` принадлежат то�
 ## Credentials и готовность к работе
 
 GitHub App PEM, installation token и operator credential находятся только на controller.
-Host guardian не получает их. Отдельный Codex login потребуется перед PR-13/пилотом;
-старый `$HOME/.codex` controller не монтируется в worker. Выделенный auth-файл для worker
-можно provision в `<worker-state>/codex-auth.json` с правами 0600; guardian копирует только
-его в отдельный `/codex` текущей задачи. История, конфигурация, MCP и skills controller
-не копируются. В тестах PR-11 авторизация не выполняется и секреты не запрашиваются.
+Host guardian не получает их. Отдельный Codex login выполняется через `runtime login`;
+старый `$HOME/.codex` controller не монтируется в worker. Guardian сохраняет auth.json
+в `<worker-state>/auth/` и переносит только его в `/codex` текущего цикла. Обновлённая
+авторизация сохраняется после подтверждённой остановки. История, конфигурация, MCP
+и skills controller не копируются. Legacy `codex-auth.json` читается только при
+отсутствии новой auth area; для новых установок используется отдельная процедура входа.
 
 Для login используйте тот же принятый контейнерный профиль и `codex login --device-auth`;
-браузерное подтверждение выполняет оператор. Продуктовое подключение этой процедуры и
-bootstrap task profile входит в PR-12/PR-13, до них live gate остаётся закрыт.
+браузерное подтверждение выполняет оператор. Модель и уровень рассуждений выбираются
+после входа, до открытия допуска, по [руководству](../elixir/docs/github_projects_setup/pr13-runtime-guide.md).
 
 ## Остановка, передача кода и callbacks
 
@@ -247,7 +253,9 @@ GitPublisher независимо проверяет историю и допу�
 Transport config содержит `ssh_config`, `destination`, `export_directory`, `cycle`, `branch`,
 `interval`, `generation`; пути и scope задаёт controller, не модель. Runtime получает
 `stop_verifier`; publisher — `export_candidate` в своих options. PR-13 должен привязать
-эти callbacks к lifecycle и асинхронным stop/watchdog событиям; здесь startup не меняется.
+эти callbacks к lifecycle. В PR13 `Runtime.Worker` использует `scripts/controller.py`
+с неизменяемыми привязками текущего interval; прежний ручной transport остаётся
+низкоуровневым контрактом и не включает допуск самостоятельно.
 
 Подробные проверки и ограничения: [отчёт PR-11](../elixir/docs/github_projects_setup/pr11-validation.md).
 Технические источники: [Podman 5.7 run](https://docs.podman.io/en/v5.7.0/markdown/podman-run.1.html),
