@@ -17,7 +17,21 @@ defmodule SymphonyElixirWeb.OperatorPanel do
       <p class="eyebrow">Symphony · Панель оператора</p>
       <h2>Управление задачей и проверка dev</h2>
       <p :if={@demo} class="operator-warning">Демонстрация — реальные задачи не выполняются</p>
-      <p>Исполнение реальных задач отключено до приёмки worker и agent-runner.</p>
+      <p :if={not Map.get(@model, :execution_enabled, false)}>Исполнение задач отключено; доступна инспекция.</p>
+      <p :if={Map.get(@model, :execution_enabled, false)}>Controller запущен в изолированном режиме. Разрешён один выбранный пилот.</p>
+      <div :if={Map.has_key?(@model, :model_selection)}>
+        <p :for={key <- ["selected", "applied"]}>
+          <%= if key == "selected", do: "Выбрано", else: "Подтверждено Codex для последней сессии" %>:
+          <%= if pair = @model.model_selection[key] do %>
+            <code><%= pair["model"] %></code> · усиление <code><%= pair["effort"] %></code>
+          <% else %>
+            <%= if key == "selected", do: "модель и усиление не выбраны", else: "сессия ещё не подтверждена" %>
+          <% end %>
+        </p>
+      </div>
+      <p :for={{location, disk} <- Map.get(@model, :storage, %{})} class={if disk["status"] in ["warning", "blocked"], do: "operator-warning"}>
+        <%= if location == "controller_disk", do: "Controller", else: "Worker" %>: свободно <%= div(disk["free_bytes"] || 0, 1_073_741_824) %> GiB · <%= disk["status"] %>
+      </p>
       <div class="operator-toolbar">
         <button phx-click="operator_refresh" disabled={@busy}>Обновить данные</button>
         <form method="post" action="/operator/logout"><input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} /><button type="submit">Выйти</button></form>

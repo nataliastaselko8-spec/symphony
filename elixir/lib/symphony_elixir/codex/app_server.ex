@@ -5,6 +5,8 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   require Logger
   alias SymphonyElixir.{Codex.DynamicTool, Config, PathSafety, SSH}
+  alias SymphonyElixir.Codex.ModelSelection
+  alias SymphonyElixir.Runtime.Worker
 
   @initialize_id 1
   @thread_start_id 2
@@ -19,6 +21,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           thread_sandbox: String.t(),
           turn_sandbox_policy: map(),
           thread_id: String.t(),
+          model_selection: map() | nil,
           workspace: Path.t(),
           worker_host: String.t() | nil,
           dynamic_tool_binding: map()
@@ -45,7 +48,7 @@ defmodule SymphonyElixir.Codex.AppServer do
       metadata = port_metadata(port, worker_host)
 
       with {:ok, session_policies} <- session_policies(expanded_workspace, worker_host),
-           {:ok, thread_id} <-
+           {:ok, thread_id, selection} <-
              do_start_session(port, expanded_workspace, session_policies, dynamic_tool_binding) do
         {:ok,
          %{
@@ -56,6 +59,7 @@ defmodule SymphonyElixir.Codex.AppServer do
            thread_sandbox: session_policies.thread_sandbox,
            turn_sandbox_policy: session_policies.turn_sandbox_policy,
            thread_id: thread_id,
+           model_selection: selection,
            workspace: expanded_workspace,
            worker_host: worker_host,
            dynamic_tool_binding: dynamic_tool_binding
@@ -79,7 +83,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           thread_id: thread_id,
           workspace: workspace,
           dynamic_tool_binding: dynamic_tool_binding
-        },
+        } = session,
         prompt,
         issue,
         opts \\ []
@@ -91,7 +95,9 @@ defmodule SymphonyElixir.Codex.AppServer do
         DynamicTool.execute(tool, arguments, dynamic_tool_binding, issue: issue)
       end)
 
-    case start_turn(port, thread_id, prompt, issue, workspace, approval_policy, turn_sandbox_policy) do
+    policies = {approval_policy, turn_sandbox_policy, Map.get(session, :model_selection)}
+
+    case start_turn(port, thread_id, prompt, issue, workspace, policies) do
       {:ok, turn_id} ->
         session_id = "#{thread_id}-#{turn_id}"
         Logger.info("Codex session started for #{issue_context(issue)} session_id=#{session_id}")
@@ -120,6 +126,8 @@ defmodule SymphonyElixir.Codex.AppServer do
              }}
 
           {:error, reason} ->
+            report_model_failure(session, reason)
+
             Logger.warning("Codex session ended with error for #{issue_context(issue)} session_id=#{session_id}: #{inspect(reason)}")
 
             emit_message(
@@ -146,6 +154,11 @@ defmodule SymphonyElixir.Codex.AppServer do
   def stop_session(%{port: port}) when is_port(port) do
     stop_port(port)
   end
+
+  defp report_model_failure(%{model_selection: selection, dynamic_tool_binding: %{delivery: handle}}, :codex_model_rerouted)
+       when is_map(selection), do: Worker.model_rejected(handle, :codex_model_rerouted)
+
+  defp report_model_failure(_, _), do: :ok
 
   defp validate_workspace_cwd(workspace, nil) when is_binary(workspace) do
     expanded_workspace = Path.expand(workspace)
@@ -305,9 +318,15 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp do_start_session(port, workspace, session_policies, dynamic_tool_binding) do
-    case send_initialize(port) do
-      :ok -> start_thread(port, workspace, session_policies, dynamic_tool_binding)
-      {:error, reason} -> {:error, reason}
+    rpc = fn params ->
+      send_message(port, %{"method" => "model/list", "id" => 4, "params" => params})
+      await_response(port, 4)
+    end
+
+    with :ok <- send_initialize(port),
+         {:ok, selection} <- ModelSelection.load(dynamic_tool_binding, rpc),
+         {:ok, thread_id} <- start_thread(port, workspace, session_policies, dynamic_tool_binding, selection) do
+      {:ok, thread_id, selection}
     end
   end
 
@@ -315,24 +334,29 @@ defmodule SymphonyElixir.Codex.AppServer do
          port,
          workspace,
          %{approval_policy: approval_policy, thread_sandbox: thread_sandbox},
-         dynamic_tool_binding
+         dynamic_tool_binding,
+         selection
        ) do
     send_message(port, %{
       "method" => "thread/start",
       "id" => @thread_start_id,
-      "params" => %{
-        "approvalPolicy" => approval_policy,
-        "sandbox" => thread_sandbox,
-        "cwd" => workspace,
-        "dynamicTools" => dynamic_tool_binding.tool_specs
-      }
+      "params" =>
+        Map.merge(
+          %{
+            "approvalPolicy" => approval_policy,
+            "sandbox" => thread_sandbox,
+            "cwd" => workspace,
+            "dynamicTools" => dynamic_tool_binding.tool_specs
+          },
+          ModelSelection.thread_params(selection)
+        )
     })
 
     case await_response(port, @thread_start_id) do
-      {:ok, %{"thread" => thread_payload}} ->
-        case thread_payload do
-          %{"id" => thread_id} -> {:ok, thread_id}
-          _ -> {:error, {:invalid_thread_payload, thread_payload}}
+      {:ok, %{"thread" => thread_payload} = response} ->
+        with {:ok, thread_id} <- thread_identifier(thread_payload),
+             :ok <- ModelSelection.accepted(selection, dynamic_tool_binding, response) do
+          {:ok, thread_id}
         end
 
       other ->
@@ -340,23 +364,30 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp start_turn(port, thread_id, prompt, issue, workspace, approval_policy, turn_sandbox_policy) do
+  defp thread_identifier(%{"id" => thread_id}), do: {:ok, thread_id}
+  defp thread_identifier(payload), do: {:error, {:invalid_thread_payload, payload}}
+
+  defp start_turn(port, thread_id, prompt, issue, workspace, {approval_policy, turn_sandbox_policy, selection}) do
     send_message(port, %{
       "method" => "turn/start",
       "id" => @turn_start_id,
-      "params" => %{
-        "threadId" => thread_id,
-        "input" => [
+      "params" =>
+        Map.merge(
           %{
-            "type" => "text",
-            "text" => prompt
-          }
-        ],
-        "cwd" => workspace,
-        "title" => "#{issue.identifier}: #{issue.title}",
-        "approvalPolicy" => approval_policy,
-        "sandboxPolicy" => turn_sandbox_policy
-      }
+            "threadId" => thread_id,
+            "input" => [
+              %{
+                "type" => "text",
+                "text" => prompt
+              }
+            ],
+            "cwd" => workspace,
+            "title" => "#{issue.identifier}: #{issue.title}",
+            "approvalPolicy" => approval_policy,
+            "sandboxPolicy" => turn_sandbox_policy
+          },
+          ModelSelection.turn_params(selection)
+        )
     })
 
     case await_response(port, @turn_start_id) do
@@ -404,6 +435,9 @@ defmodule SymphonyElixir.Codex.AppServer do
     payload_string = to_string(data)
 
     case Jason.decode(payload_string) do
+      {:ok, %{"method" => "model/rerouted"}} ->
+        {:error, :codex_model_rerouted}
+
       {:ok, %{"method" => "turn/completed"} = payload} ->
         emit_turn_event(on_message, :turn_completed, payload, payload_string, port, payload)
         {:ok, :turn_completed}

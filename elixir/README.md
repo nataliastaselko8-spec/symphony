@@ -1,8 +1,9 @@
 # Symphony Elixir
 
 For this fork's portable controller/worker setup, see [runtime/README.md](../runtime/README.md).
-PR-11 provides finite Projects inspection and explicitly constructed `WorkerTransport` callbacks.
-It does not enable Projects execution or install those callbacks in application startup.
+PR13 connects Projects execution to a pinned, explicitly activated isolated runtime.
+Finite inspection remains the default. The launcher lease, worker readiness, selected model/effort
+and delivery gate must all allow a task. See the [execution guide](docs/github_projects_setup/pr13-runtime-guide.md).
 Keep machine configuration, credentials and state outside the source checkout.
 
 This directory contains the current Elixir/OTP implementation of Symphony, based on

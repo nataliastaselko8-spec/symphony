@@ -156,6 +156,25 @@ defmodule SymphonyElixir.OperatorWebTest do
 
     model = View.project(Map.put(status, :decisions, [record]))
 
+    runtime = %{
+      ready: false,
+      reasons: ["disk_space_low"],
+      storage: %{"controller_disk" => %{"free_bytes" => 2_147_483_648, "status" => "blocked"}, "worker_disk" => %{"free_bytes" => 8_589_934_592, "status" => "warning"}},
+      model: %{"selected" => %{"model" => "fixture-model", "effort" => "high", "private" => "must-not-leak"}, "applied" => nil}
+    }
+
+    active = View.project(Map.merge(status, %{execution_enabled: true, runtime_readiness: runtime}))
+    html = render_component(&OperatorPanel.panel/1, model: active)
+    assert html =~ "fixture-model"
+    assert html =~ "high"
+    assert html =~ "сессия ещё не подтверждена"
+    assert html =~ "2 GiB" and html =~ "8 GiB"
+    refute html =~ "must-not-leak"
+    runtime = put_in(runtime.model["applied"], %{"model" => "fixture-model", "effort" => "high"})
+    applied = View.project(Map.merge(status, %{execution_enabled: true, runtime_readiness: runtime}))
+    assert applied.model_selection["applied"] == %{"model" => "fixture-model", "effort" => "high"}
+    assert render_component(&OperatorPanel.panel/1, model: applied) =~ "Подтверждено Codex"
+
     form = %{
       id: "form",
       action: "validate",

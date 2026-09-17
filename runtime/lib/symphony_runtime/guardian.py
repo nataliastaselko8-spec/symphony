@@ -12,6 +12,8 @@ import time
 import uuid
 
 from .common import Rejected, atomic, canonical, command, digest, identifier, lease_clock, locked, no_links, parse_json, private_dir, private_file, read_json, require, sha
+from .storage import capacity, collect, retire
+from .images import collect_images, register
 
 MAX_BUNDLE = 80 * 1024 * 1024
 MAX_HEADER = 16384
@@ -76,6 +78,13 @@ class Guardian:
         self.heartbeat_at = self.clock()
         self.started_at = None
         self.ready()
+        image_info = parse_json(self.pod("image", "inspect", self.image))[0]
+        labels = image_info.get("Labels") or image_info.get("Config", {}).get("Labels") or {}
+        self.image_profile = {"profile_revision": labels.get("io.symphony.profile-revision"),
+                              "runtime_contract": labels.get("io.symphony.runtime-contract")}
+        register(self.root, self.image, self.pod)
+        self.next_collection = self.clock() + 3600
+        self.retention_days = 7
 
     def ready(self):
         info = self.policy_file.stat()
@@ -104,6 +113,7 @@ class Guardian:
         args = ["run", "--name", name, "--pull=never", "--userns=keep-id:uid=10001,gid=10001",
                 "--user=10001:10001", "--read-only", "--cap-drop=all", "--security-opt=no-new-privileges",
                 "--cgroupns=private", "--pid=private", "--ipc=private", "--pids-limit=512", "--memory=2g", "--cpus=2",
+                "--log-driver=k8s-file", "--log-opt=max-size=2097152",
                 "--ulimit=fsize=268435456:268435456",
                 "--cgroup-parent=" + self.cgroup + "/payload", "--tmpfs=/tmp:rw,nosuid,nodev,size=256m,mode=1777",
                 "--tmpfs=/home/worker:rw,nosuid,nodev,size=64m,mode=1777"]
@@ -140,6 +150,7 @@ class Guardian:
                        "base_sha": request["base_sha"], "container": "symphony-job-" + request["generation"],
                        "cgroup": None, "reason": None, "export": None}
         self.save()
+        atomic(keys / "binding.json", canonical({key: self.record[key] for key in ("cycle", "generation", "repo")}))
         name = "symphony-seed-" + request["generation"]
         try:
             self.pod(*self.base_args(name), "--volume", f"{work}:/workspace:rw", "--volume", f"{seed}:/input:ro",
@@ -168,9 +179,12 @@ class Guardian:
         record = self.record
         work = self.path("workspaces", record["cycle"])
         keys = self.path("keys", record["generation"])
+        central = private_dir(self.root / "auth", create=True)
         auth = self.path("codex", record["cycle"])
         # Optional operator-provisioned auth only, never an entire controller CODEX_HOME.
-        source = self.root / "codex-auth.json"
+        source = central / "auth.json"
+        if not source.exists() and not source.is_symlink():
+            source = self.root / "codex-auth.json"
         if source.exists() or source.is_symlink():
             private_file(source)
             raw = source.read_bytes()
@@ -196,6 +210,8 @@ class Guardian:
     def stop(self, reason):
         if self.record is None:
             return {"phase": "stopped"}
+        sync_auth = self.record.get("auth_sync_pending", False) or self.record["phase"] in ("starting", "running", "stopping", "stop_unconfirmed")
+        self.record["auth_sync_pending"] = sync_auth
         self.record.update(phase="stopping", reason=reason)
         try:
             self.save()
@@ -224,7 +240,28 @@ class Guardian:
             self.save()
         except (Rejected, OSError):
             self.record["phase"] = "stop_unconfirmed"
-        return self.summary()
+        result = self.summary()
+        if self.record["phase"] == "stopped" and sync_auth:
+            source = no_links(self.root / "codex" / self.record["cycle"] / "auth.json")
+            if source.exists():
+                require(private_file(source).stat().st_size <= 65536, "codex_auth_too_large")
+                raw = private_file(source).read_bytes()
+                require(0 < len(raw) <= 65536, "codex_auth_too_large")
+                atomic(private_dir(self.root / "auth", create=True) / "auth.json", raw)
+            self.record["auth_sync_pending"] = False
+            self.save()
+        if self.record["phase"] == "stopped" and self.record.get("purpose") == "login":
+            receipt = private_dir(self.root / "login-receipts", create=True) / (self.record["generation"] + ".json")
+            atomic(receipt, canonical({key: result[key] for key in ("phase", "generation", "interval")}))
+            import shutil
+            require(shutil.rmtree.avoids_symlink_attacks, "safe_tree_removal_required")
+            for kind in ("keys", "workspaces", "codex"):
+                path = no_links(self.root / kind / identifier(self.record["generation"]))
+                if path.exists():
+                    shutil.rmtree(private_dir(path))
+            self.record = self.record.get("previous")
+            self.save()
+        return result
 
     def export(self, request):
         self.bound(request, ("sha",))
@@ -271,16 +308,29 @@ class Guardian:
         return record["export"], raw
 
     def summary(self):
+        try:
+            self.ready()
+            ready = True
+        except (Rejected, OSError):
+            ready = False
+        auth = self.root / "auth/auth.json"
+        source = auth if auth.exists() or auth.is_symlink() else self.root / "codex-auth.json"
+        try:
+            auth_present = 0 < private_file(source).stat().st_size <= 65536
+        except (Rejected, OSError):
+            auth_present = False
+        metadata = {"image": self.image, "network_ready": ready, "auth_present": auth_present,
+                    "free_bytes": capacity(self.root)["free_bytes"], **getattr(self, "image_profile", {})}
         if self.record is None:
-            return {"phase": "idle"}
+            return {"phase": "idle", **metadata}
         record = self.record
         result = {key: record[key] for key in ("phase", "cycle", "branch", "repo", "interval", "generation", "reason")}
         if record.get("port"):
             result["port"] = record["port"]
-        host_public = self.path("keys", record["generation"]) / "host_key.pub"
+        host_public = no_links(self.root / "keys" / record["generation"] / "host_key.pub")
         if host_public.exists():
             result["host_public_key"] = " ".join(host_public.read_text().split()[:2])
-        return result
+        return {**result, **metadata}
 
     def tick(self):
         with self.mutex:
@@ -292,6 +342,14 @@ class Guardian:
                     return
                 if self.started_at is None or self.clock() - self.heartbeat_at >= 45 or self.clock() - self.started_at >= self.record["active_seconds"]:
                     self.stop("lease_or_deadline_expired")
+            elif self.clock() >= getattr(self, "next_collection", float("inf")):
+                self.next_collection = self.clock() + 3600
+                try:
+                    collect(self.root, retention_days=self.retention_days, dry_run=False, categories=("workspaces", "codex", "keys", "seeds", "exports"))
+                    collect_images(self.root, self.image, self.pod, self.retention_days, dry_run=False)
+                except (Rejected, OSError, ValueError):
+                    from .storage import bounded_log
+                    bounded_log(self.root / "maintenance.log", b"cleanup requires operator inspection\n")
 
     def dispatch(self, request, body=b""):
         with self.mutex:
@@ -301,10 +359,45 @@ class Guardian:
             if action == "status":
                 require(set(request) == {"action"}, "invalid_status_request")
                 return self.summary(), b""
+            if action == "retire":
+                require(set(request) == {"action", "cycle", "report", "retention_days"}, "invalid_retirement_request")
+                cycle = identifier(request["cycle"])
+                require(not self.record or self.record["phase"] in ("stopped", "exported"), "confirmed_stop_required")
+                report = request["report"]
+                generations = report.get("generations")
+                require(isinstance(generations, list) and len(generations) <= 1000, "invalid_generation_list")
+                if self.record and self.record["cycle"] == cycle:
+                    require(self.record["generation"] in generations, "retirement_generation_missing")
+                for generation in generations:
+                    receipt = self.root / "keys" / identifier(generation) / "binding.json"
+                    if receipt.exists():
+                        bound = read_json(private_file(receipt))
+                        require(bound["cycle"] == cycle and bound["generation"] == generation, "retirement_owner_mismatch")
+                    else:
+                        existing = read_json(private_file(self.root / "reports" / (cycle + ".json")))
+                        require(generation in existing["report"]["generations"], "retirement_owner_unknown")
+                retire(self.root, cycle, report, retention_days=request["retention_days"])
+                removed = collect(self.root, retention_days=request["retention_days"], dry_run=False,
+                                  categories=("workspaces", "codex", "keys", "seeds", "exports"))
+                return {"retired": cycle, "removed": removed}, b""
+            if action == "collect":
+                require(set(request) == {"action", "retention_days", "dry_run"} and type(request["dry_run"]) is bool, "invalid_cleanup_request")
+                active = self.record["cycle"] if self.record and self.record["phase"] not in ("stopped", "exported") else None
+                removed = collect(self.root, active_cycle=active, retention_days=request["retention_days"], dry_run=request["dry_run"], categories=("workspaces", "codex", "keys", "seeds", "exports"))
+                images = collect_images(self.root, self.image, self.pod, request["retention_days"], dry_run=request["dry_run"])
+                self.retention_days = request["retention_days"]
+                return {"removed": removed, "images": images}, b""
+            if action == "login_prepare":
+                return self.login_prepare(request), b""
             if action == "start":
                 return self.start(request), b""
             if action == "export":
                 return self.export(request)
+            if action == "stop" and isinstance(request.get("generation"), str) and request["generation"].startswith("login-"):
+                receipt = self.root / "login-receipts" / (identifier(request["generation"]) + ".json")
+                if receipt.exists():
+                    require(set(request) == {"action", "generation", "interval"} and request["interval"] == request["generation"], "invalid_login_stop")
+                    return read_json(private_file(receipt)), b""
             self.bound(request)
             if action == "heartbeat":
                 require(self.record["phase"] == "running", "worker_not_running")
@@ -312,6 +405,21 @@ class Guardian:
                 return self.summary(), b""
             require(action == "stop", "unknown_operation")
             return self.stop("controller_requested"), b""
+
+    def login_prepare(self, request):
+        require(set(request) == {"action", "generation", "ssh_public_key"}, "invalid_login_request")
+        generation = identifier(request["generation"])
+        require(generation.startswith("login-"), "login_generation_required")
+        require(not self.record or self.record["phase"] in ("stopped", "exported"), "confirmed_stop_required")
+        keys = self.path("keys", generation)
+        require(not (keys / "host_key").exists(), "login_generation_reused")
+        atomic(keys / "authorized_keys", public_key(request["ssh_public_key"]).encode())
+        command(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(keys / "host_key")])
+        self.record = {"phase": "prepared", "purpose": "login", "previous": self.record,
+                       "cycle": generation, "interval": generation, "generation": generation, "repo": None,
+                       "branch": None, "container": "symphony-job-" + generation, "reason": None, "cgroup": None}
+        self.save()
+        return self.summary()
 
 
 def serve(guardian, stop_event=None):

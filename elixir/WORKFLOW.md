@@ -7,9 +7,10 @@
 # Read-only delivery observer and pinned policy: docs/github_projects_delivery.md.
 # Run separately with mix github_projects.delivery.inspect; no worker or store writes.
 # Internal lifecycle and bounded SYMPHONY_DELIVERY_CONTEXT hook input: docs/delivery_runtime.md.
-# Projects execution stays disabled. agent-runner owns the project template; runtime configure/render
+# Projects execution requires explicit pinned PR13 activation. agent-runner owns the project template; runtime configure/render
 # creates the executable workflow in the developer's private local config directory.
 # Portable worker setup and explicit transport callbacks: ../runtime/README.md (PR-11).
+# One pilot, local model/effort selection and preserved work: docs/github_projects_setup/pr13-runtime-guide.md.
 # Session-bound task tools and controller publication: docs/github_projects_publication.md.
 # project_handoff submits retained intent; only verified CI permits PR ready. Merge stays with the operator.
 # Optional server.operator: {principal: local:OWNER, credential_path: /home/CONTROLLER/private/login-token}.

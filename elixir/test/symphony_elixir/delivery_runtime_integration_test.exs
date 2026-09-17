@@ -6,6 +6,246 @@ defmodule SymphonyElixir.DeliveryRuntimeIntegrationTest do
   alias SymphonyElixir.DeliveryObserverSupport, as: F
   alias SymphonyElixir.DeliveryRuntime.Guard
   alias SymphonyElixir.GitHubProjects.Delivery.Observation
+  alias SymphonyElixir.Runtime.Worker
+
+  test "isolated task explicitly pins model and effort for each turn and records the acknowledged pair", c do
+    {runtime, trace} = isolated_model_runtime(c)
+    reserve()
+    parent = self()
+
+    assert {:ok, _} =
+             DeliveryRuntime.dispatch(runtime, issue(), nil, fn handle ->
+               with {:ok, host} <- Worker.prepare(handle),
+                    {:ok, session} <- AppServer.start_session("/workspace/repo", worker_host: host, delivery: handle) do
+                 try do
+                   first = AppServer.run_turn(session, "first", issue())
+                   second = AppServer.run_turn(session, "continue", issue())
+                   send(parent, {:turns, first, second})
+                   receive do: (:finish -> :ok)
+                 after
+                   AppServer.stop_session(session)
+                 end
+               else
+                 error -> send(parent, {:failed, error})
+               end
+             end)
+
+    assert_receive {:turns, {:ok, _}, {:ok, _}}, 5_000
+    assert Worker.status().model["applied"] == %{"model" => "fixture-model", "effort" => "high"}
+    calls = trace |> File.stream!() |> Enum.map(&Jason.decode!/1)
+    assert Enum.count(calls, &(&1["method"] == "model/list")) == 2
+    thread = Enum.find(calls, &(&1["method"] == "thread/start"))["params"]
+    assert thread["model"] == "fixture-model"
+    assert thread["config"]["model_reasoning_effort"] == "high"
+
+    for turn <- Enum.filter(calls, &(&1["method"] == "turn/start")) do
+      assert turn["params"]["model"] == "fixture-model"
+      assert turn["params"]["effort"] == "high"
+    end
+
+    assert :ok = DeliveryRuntime.shutdown(runtime)
+    await(fn -> DeliveryRuntime.status(runtime).worker == nil end)
+    assert DeliveryRuntime.status(runtime).gate.state["cycle"] != nil
+    send(runtime, :tick)
+    await(fn -> :sys.get_state(Worker).closing end)
+    send(Worker, :poll)
+  end
+
+  test "different acknowledged effort blocks the task before any turn is sent", c do
+    {runtime, trace} = isolated_model_runtime(c, "medium")
+    reserve()
+    parent = self()
+
+    assert {:ok, _} =
+             DeliveryRuntime.dispatch(runtime, issue(), nil, fn handle ->
+               {:ok, host} = Worker.prepare(handle)
+               send(parent, {:session, AppServer.start_session("/workspace/repo", worker_host: host, delivery: handle)})
+               receive do: (:finish -> :ok)
+             end)
+
+    assert_receive {:session, {:error, :model_application_mismatch}}, 5_000
+    refute File.read!(trace) =~ "turn/start"
+    refute Worker.status().ready
+    assert Worker.status().reasons == [:model_application_mismatch]
+    assert :ok = DeliveryRuntime.shutdown(runtime)
+  end
+
+  test "model rerouting stops the turn and blocks further admission", c do
+    {runtime, trace} = isolated_model_runtime(c)
+    reserve()
+    parent = self()
+
+    assert {:ok, _} =
+             DeliveryRuntime.dispatch(runtime, issue(), nil, fn handle ->
+               {:ok, host} = Worker.prepare(handle)
+               {:ok, session} = AppServer.start_session("/workspace/repo", worker_host: host, delivery: handle)
+
+               try do
+                 send(parent, {:rerouted, AppServer.run_turn(session, "reroute", issue())})
+                 receive do: (:finish -> :ok)
+               after
+                 AppServer.stop_session(session)
+               end
+             end)
+
+    assert_receive {:rerouted, {:error, :codex_model_rerouted}}, 5_000
+    refute Worker.status().ready
+    assert Worker.status().reasons == [:codex_model_rerouted]
+    assert Worker.status().model["applied"] == nil
+    calls = trace |> File.stream!() |> Enum.map(&Jason.decode!/1)
+    assert Enum.count(calls, &(&1["method"] == "turn/start")) == 1
+    assert :ok = DeliveryRuntime.shutdown(runtime)
+  end
+
+  for failure <- ["login", "endpoint", "credential"] do
+    @startup_failure failure
+    test "isolated startup refuses #{@startup_failure} failure without sending a prompt", c do
+      {runtime, trace} = isolated_model_runtime(c, @startup_failure)
+      reserve()
+      parent = self()
+
+      assert {:ok, _} =
+               DeliveryRuntime.dispatch(runtime, issue(), nil, fn handle ->
+                 send(parent, {:startup, Worker.prepare(handle)})
+                 receive do: (:finish -> :ok)
+               end)
+
+      assert_receive {:startup, {:error, :isolated_worker_start_unconfirmed}}, 5_000
+      refute File.exists?(trace)
+      send(runtime, :runtime_worker_lost)
+      await(fn -> DeliveryRuntime.status(runtime).worker == nil end)
+      assert DeliveryRuntime.status(runtime).gate.state["cycle"] != nil
+      send(runtime, :runtime_activation_invalid)
+    end
+  end
+
+  test "runtime stop crash is not treated as confirmed resource removal", c do
+    {runtime, _} = start_runtime(c, stop_verifier: fn _ -> exit(:offline) end)
+    reserve()
+    parent = self()
+
+    assert {:ok, _} =
+             DeliveryRuntime.dispatch(runtime, issue(), nil, fn _ ->
+               send(parent, :running)
+               receive do: (:finish -> :ok)
+             end)
+
+    assert_receive :running
+    assert :ok = DeliveryRuntime.pause(runtime, "stop")
+    await(fn -> DeliveryRuntime.status(runtime).reason == :stop_unconfirmed end)
+    assert DeliveryRuntime.status(runtime).gate.state["cycle"] != nil
+  end
+
+  test "launcher stop request requires the current private token", c do
+    {runtime, _} = isolated_model_runtime(c)
+    send(runtime, :tick)
+    refute :sys.get_state(runtime).closing
+    request = Path.join(c.root, "shutdown.request")
+    File.write!(request, Jason.encode!(%{"token" => "stale"}))
+    send(Worker, :poll)
+    refute :sys.get_state(Worker).closing
+    File.write!(request, Jason.encode!(%{"token" => "fixture"}))
+    send(Worker, :poll)
+    await(fn -> :sys.get_state(Worker).closing end)
+    send(runtime, :tick)
+    await(fn -> :sys.get_state(Worker).finishing end)
+    send(Worker, :poll)
+    assert DeliveryRuntime.status(runtime).worker == nil
+  end
+
+  defp isolated_model_runtime(c, actual_effort \\ "high") do
+    config = put_in(c.config.tracker.provider["item_ids"], ["item-A"]).config
+    {:ok, settings} = Config.delivery_observer_settings(config)
+    c = %{c | config: config, settings: settings}
+    {runtime, _} = start_runtime(c, isolated: true, stop_verifier: &Worker.stop/1)
+    {:ok, record} = Agent.start_link(fn -> %{} end)
+    selection = %{"model" => "fixture-model", "effort" => "high"}
+
+    transport = fn _, _, request, _ ->
+      case request["action"] do
+        "prepare" ->
+          ctx = request["context"]
+          value = %{"cycle" => ctx["cycle_id"], "interval" => ctx["interval_id"], "generation" => ctx["interval_id"]}
+          store_model_record(record, value)
+          {:ok, %{}}
+
+        "start" ->
+          {:ok,
+           Map.merge(Agent.get(record, & &1), %{"host" => "symphony-task-" <> request["generation"], "ssh_config" => "/private/fixture", "workspace" => "/workspace/repo", "selection" => selection})}
+
+        "model_applied" ->
+          {:ok, %{"applied" => request["selection"]}}
+
+        "stop" ->
+          {:ok, %{"phase" => "stopped"}}
+
+        _ ->
+          {:ok, %{"ready" => true, "reasons" => []}}
+      end
+    end
+
+    activation = %{
+      helper: "fixture",
+      config: "fixture",
+      proof: %{"state_root" => c.root, "launch_token" => "fixture"},
+      transport: transport,
+      credential: fn -> {:ok, "fixture"} end,
+      probe: fn _, _, _ -> model_probe(actual_effort, record) end
+    }
+
+    activation = if actual_effort == "credential", do: Map.delete(activation, :credential), else: activation
+
+    worker_config =
+      if actual_effort == "credential" do
+        provider = %{"repo" => "ExampleOrg/app", "github_app" => %{"app_id" => "1", "installation_id" => "2", "private_key_path" => "/nonexistent/fixture.pem"}}
+        put_in(config.tracker.provider, provider)
+      else
+        config
+      end
+
+    tasks = start_supervised!({Task.Supervisor, name: __MODULE__.WorkerTasks})
+    start_supervised!({Worker, activation: activation, config: worker_config, tasks: tasks, runtime: runtime})
+    await(fn -> Worker.status().ready end)
+    trace = Path.join(c.root, "model-trace.jsonl")
+    fake = Path.join(c.root, "ssh")
+
+    File.write!(fake, """
+    #!/usr/bin/python3
+    import json,sys
+    for line in sys.stdin:
+        value=json.loads(line)
+        with open(#{inspect(trace)},'a') as output: output.write(json.dumps(value)+'\\n')
+        method=value.get('method')
+        if 'id' not in value: continue
+        if method=='initialize': result={}
+        elif method=='model/list':
+            if value['params']['cursor'] is None: result={'data':[], 'nextCursor':'second'}
+            else: result={'data':[{'model':'fixture-model','supportedReasoningEfforts':[{'reasoningEffort':'high'}]}],'nextCursor':None}
+        elif method=='thread/start': result={'thread':{'id':'thread'},'model':'fixture-model','reasoningEffort':#{inspect(actual_effort)}}
+        elif method=='turn/start': result={'turn':{'id':'turn'}}
+        else: result={}
+        print(json.dumps({'id':value['id'],'result':result}),flush=True)
+        if method=='turn/start':
+            event='model/rerouted' if 'reroute' in json.dumps(value['params']['input']) else 'turn/completed'
+            print(json.dumps({'method':event,'params':{}}),flush=True)
+    """)
+
+    File.chmod!(fake, 0o700)
+    old_path = System.get_env("PATH")
+    System.put_env("PATH", c.root <> ":" <> old_path)
+    on_exit(fn -> System.put_env("PATH", old_path) end)
+    {runtime, trace}
+  end
+
+  defp store_model_record(record, value), do: Agent.update(record, fn _ -> value end)
+
+  defp model_probe("login", _), do: {:error, :codex_login_required}
+  defp model_probe("endpoint", _), do: {:error, :worker_probe_failed}
+
+  defp model_probe(_, record) do
+    attempts = Agent.get_and_update(record, fn value -> {Map.get(value, "probes", 0), Map.update(value, "probes", 1, &(&1 + 1))} end)
+    if attempts == 0, do: {:error, :worker_probe_failed}, else: :ok
+  end
 
   setup do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
@@ -64,12 +304,47 @@ defmodule SymphonyElixir.DeliveryRuntimeIntegrationTest do
     end)
   end
 
-  defp start_runtime(c) do
+  defp start_runtime(c, extra \\ []) do
     gate = start_supervised!({DeliveryGate, settings: c.settings.gate})
     tasks = start_supervised!(Task.Supervisor)
-    opts = [name: DeliveryRuntime, config: c.config, gate: gate, task_supervisor: tasks] ++ options(c)
+    opts = [name: DeliveryRuntime, config: c.config, gate: gate, task_supervisor: tasks] ++ Keyword.merge(options(c), extra)
     runtime = start_supervised!({DeliveryRuntime, opts})
     {runtime, gate}
+  end
+
+  test "slow resource stop does not block status, pause or shutdown", c do
+    parent = self()
+
+    verifier = fn _ ->
+      send(parent, {:confirm_stop, self()})
+
+      receive do
+        :confirm -> :stopped
+      end
+    end
+
+    {runtime, _} = start_runtime(c, stop_verifier: verifier)
+    reserve()
+
+    {:ok, worker} =
+      DeliveryRuntime.dispatch(runtime, issue(), nil, fn _ ->
+        send(parent, :working)
+
+        receive do
+          :finish -> :ok
+        end
+      end)
+
+    assert_receive :working
+    assert :ok = DeliveryRuntime.shutdown(runtime)
+    assert_receive {:confirm_stop, verifier_pid}
+    refute Process.alive?(worker)
+    assert DeliveryRuntime.status(runtime).worker != nil
+    assert :ok = DeliveryRuntime.pause(runtime, "operator requested")
+    assert {:error, :controller_shutdown} = DeliveryRuntime.dispatch(runtime, issue(), nil, fn _ -> flunk("late dispatch") end)
+    send(verifier_pid, :confirm)
+    await(fn -> DeliveryRuntime.status(runtime).worker == nil end)
+    assert DeliveryRuntime.status(runtime).gate.state["cycle"] != nil
   end
 
   defp reserve do
@@ -82,6 +357,18 @@ defmodule SymphonyElixir.DeliveryRuntimeIntegrationTest do
   end
 
   test "scheduler restart terminates tasks and preserves the uncertain interval", c do
+    saved_activation = Application.get_env(:symphony_elixir, :runtime_activation)
+    on_exit(fn -> Application.put_env(:symphony_elixir, :runtime_activation, saved_activation) end)
+    config = put_in(c.config.tracker.provider["item_ids"], ["item-A"]).config
+    {:ok, settings} = Config.delivery_observer_settings(config)
+    c = %{c | config: config, settings: settings}
+    path = Workflow.workflow_file_path()
+    hash = :crypto.hash(:sha256, File.read!(path)) |> Base.encode16(case: :lower)
+    proof = %{"workflow" => path, "workflow_sha256" => hash, "state_root" => c.root, "launch_token" => "fixture"}
+    transport = fn _, _, _, _ -> {:ok, %{"ready" => true, "reasons" => []}} end
+    activation = %{settings: config, helper: "fixture", config: "fixture", proof: proof, transport: transport}
+    Application.put_env(:symphony_elixir, :runtime_activation, activation)
+
     sup =
       start_supervised!(
         {AgentRuntimeSupervisor,
@@ -90,9 +377,11 @@ defmodule SymphonyElixir.DeliveryRuntimeIntegrationTest do
          task_supervisor_name: __MODULE__.Tasks,
          orchestrator_name: __MODULE__.Scheduler,
          gate_name: __MODULE__.Gate,
-         config: c.config,
+         config: config,
          delivery_options: options(c)}
       )
+
+    await(fn -> Worker.status().ready end)
 
     reserve()
     parent = self()
@@ -123,7 +412,7 @@ defmodule SymphonyElixir.DeliveryRuntimeIntegrationTest do
     snapshot = Orchestrator.snapshot(__MODULE__.Scheduler, 2_000)
     assert snapshot.delivery.gate.version.epoch != before.version.epoch
     assert snapshot.delivery.gate.state["cycle"]["budget"]["interval"] != nil
-    assert snapshot.delivery.execution_enabled == false
+    assert snapshot.delivery.execution_enabled == true
     assert {:error, _} = DeliveryRuntime.dispatch(DeliveryRuntime, issue(), nil, fn _ -> flunk("restart duplicated work") end)
     assert Process.alive?(sup)
   end

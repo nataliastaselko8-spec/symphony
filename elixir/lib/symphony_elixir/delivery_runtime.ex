@@ -1,5 +1,5 @@
 defmodule SymphonyElixir.DeliveryRuntime do
-  @moduledoc "Controller lifecycle coordinator. Projects live execution remains disabled at application entry points."
+  @moduledoc "Controller lifecycle coordinator with separately confirmed isolated resources."
 
   use GenServer
   require Logger
@@ -12,6 +12,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
   alias SymphonyElixir.GitHubProjects.Publication
   alias SymphonyElixir.Operator.{Auth, Decision}
   alias SymphonyElixir.Operator.Policy, as: OperatorPolicy
+  alias SymphonyElixir.Runtime.Worker
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
@@ -36,6 +37,9 @@ defmodule SymphonyElixir.DeliveryRuntime do
 
   @spec pause(GenServer.server(), String.t()) :: :ok
   def pause(server, reason), do: GenServer.call(server, {:pause, reason}, 15_000)
+
+  @spec shutdown(GenServer.server()) :: :ok
+  def shutdown(server), do: GenServer.call(server, :shutdown, 15_000)
 
   @spec tool(map(), String.t(), map()) :: {:ok, map()} | {:error, atom()}
   def tool(handle, name, args) do
@@ -81,13 +85,15 @@ defmodule SymphonyElixir.DeliveryRuntime do
         observation: nil,
         observed_at: nil,
         worker: nil,
+        stopping: nil,
         effect: nil,
         effect_retry_at: now.(),
         read: nil,
         next_read_at: now.(),
         retry_at: now.(),
         reason: :reconciliation_required,
-        restart: false
+        restart: false,
+        closing: false
       }
 
       send(self(), :observe)
@@ -149,7 +155,8 @@ defmodule SymphonyElixir.DeliveryRuntime do
       observation: queue_readiness(state, context, state.observation),
       observation_age_ms: age(state),
       restart_required: state.restart,
-      execution_enabled: false,
+      execution_enabled: Keyword.get(state.opts, :isolated, false),
+      runtime_readiness: runtime_readiness(state),
       decisions: DeliveryGate.decisions(state.gate)
     }
 
@@ -160,6 +167,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
     context = DeliveryGate.status(state.gate)
 
     with :ok <- ready(state, context),
+         :ok <- runtime_admission(state, context),
          :ok <- Policy.admission(state.settings, context.state, state.observation, issue) do
       if context.state["cycle"] == nil do
         reserve(state, context, issue)
@@ -196,7 +204,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
     cycle = DeliveryGate.status(state.gate).state["cycle"]
 
     result =
-      with true <- cycle["cancellation"] == nil and not state.restart and effect_current?(state),
+      with true <- cycle["cancellation"] == nil and not state.restart and not state.closing and effect_current?(state),
            :ok <- candidate_proof(state, id, step, proof),
            {:ok, _} <- execute(state, "effect_sent", %{"operation_id" => id, "step" => step}),
            do: :ok,
@@ -214,6 +222,9 @@ defmodule SymphonyElixir.DeliveryRuntime do
     state = block(state, reason)
     {:reply, :ok, stop_worker(state, reason)}
   end
+
+  def handle_call(:shutdown, _from, state),
+    do: {:reply, :ok, stop_worker(%{state | closing: true}, :controller_shutdown)}
 
   def handle_call({:command, version, id, action, args}, _from, state) do
     context = DeliveryGate.status(state.gate)
@@ -258,11 +269,26 @@ defmodule SymphonyElixir.DeliveryRuntime do
   def handle_info(:tick, state) do
     schedule_tick(state.opts)
     state = state |> check_deadline() |> account()
-    {:noreply, state |> maybe_read() |> pump_effect()}
+    {:noreply, state |> maybe_read() |> pump_effect() |> notify_shutdown()}
   end
 
   def handle_info(:pump_effect, state), do: {:noreply, pump_effect(state)}
+
+  def handle_info(:controller_shutdown, state),
+    do: {:noreply, stop_worker(%{state | closing: true}, :controller_shutdown)}
+
+  def handle_info(reason, state) when reason in [:runtime_activation_invalid, :runtime_worker_lost],
+    do: {:noreply, stop_worker(block(state, Atom.to_string(reason)), reason)}
+
   def handle_info({:publication_stop, interval}, %{worker: %{interval: interval}} = state), do: {:noreply, stop_worker(state, :publication_requested)}
+
+  def handle_info({ref, result}, %{stopping: %{task: %{ref: ref}} = stopping} = state) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, finish_stop(%{state | stopping: nil}, stopping.reason, result)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _, _}, %{stopping: %{task: %{ref: ref}}} = state),
+    do: {:noreply, finish_stop(%{state | stopping: nil}, :stop_failed, :stop_unconfirmed)}
 
   def handle_info({ref, result}, %{effect: %{task: %{ref: ref}} = effect} = state) do
     Process.demonitor(ref, [:flush])
@@ -308,6 +334,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
 
   defp ready(state, context) do
     cond do
+      state.closing -> {:error, :controller_shutdown}
       state.restart -> {:error, :restart_required}
       state.worker != nil or state.effect != nil -> {:error, :worker_not_stopped}
       state.observation == nil or age(state) >= freshness(state) -> {:error, :observation_required}
@@ -420,8 +447,8 @@ defmodule SymphonyElixir.DeliveryRuntime do
           |> Map.put("task_base_sha", cycle["work"]["base_sha"])
           |> Map.put("expected_dev_sha", state.observation.facts["dev_sha"])
 
-        handle = %{runtime: self(), gate: state.gate, nonce: receipt.nonce, context: json}
         now = state.now.()
+        handle = %{runtime: self(), gate: state.gate, nonce: receipt.nonce, context: json, isolated: Keyword.get(state.opts, :isolated, false), deadline: now + receipt.remaining_ms}
 
         worker = %{
           pid: pid,
@@ -584,8 +611,14 @@ defmodule SymphonyElixir.DeliveryRuntime do
   defp worker_down(state, reason) do
     worker = state.worker
     verifier = Keyword.get(state.opts, :stop_verifier, fn w -> if w.effects, do: :stop_unconfirmed, else: :stopped end)
+    task = Task.Supervisor.async_nolink(state.tasks, fn -> verifier.(worker) end)
+    %{state | stopping: %{task: task, reason: reason}, worker: %{worker | status: :stopping}}
+  end
 
-    if verifier.(worker) == :stopped do
+  defp finish_stop(state, reason, proof) do
+    worker = state.worker
+
+    if proof == :stopped do
       elapsed = max(worker.elapsed_ms, state.now.() - worker.started_at)
       result = execute(state, "stop_work", %{"interval_id" => worker.interval, "elapsed_ms" => elapsed})
       state = %{state | worker: nil}
@@ -595,6 +628,38 @@ defmodule SymphonyElixir.DeliveryRuntime do
       state = block(state, "stop_unconfirmed")
       Logger.warning("Delivery worker stop unconfirmed #{worker_context(worker)}")
       %{state | worker: %{worker | status: :stop_unconfirmed}, reason: :stop_unconfirmed}
+    end
+  end
+
+  defp runtime_readiness(state) do
+    if Keyword.get(state.opts, :isolated, false), do: Worker.status(), else: %{ready: false, reasons: [:execution_disabled]}
+  end
+
+  defp runtime_admission(state, context) do
+    if Keyword.get(state.opts, :isolated, false) do
+      cond do
+        context.state["last_cycle"] != nil -> {:error, :pilot_finished}
+        state.settings.project.item_ids == [] and context.state["cycle"] == nil -> {:error, :pilot_not_selected}
+        runtime_readiness(state).ready != true -> {:error, :worker_not_ready}
+        true -> :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp notify_shutdown(state) do
+    if Keyword.get(state.opts, :isolated, false) and state.worker == nil and state.effect == nil and state.stopping == nil do
+      last = DeliveryGate.status(state.gate).state["last_cycle"]
+
+      if state.closing or last != nil do
+        send(Worker, {:runtime_quiescent, last})
+        %{state | closing: true}
+      else
+        state
+      end
+    else
+      state
     end
   end
 
@@ -663,6 +728,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
 
   defp pump_effect(%{effect: effect} = state) when not is_nil(effect), do: state
   defp pump_effect(%{restart: true} = state), do: state
+  defp pump_effect(%{closing: true} = state), do: state
 
   defp pump_effect(state) do
     context = DeliveryGate.status(state.gate)

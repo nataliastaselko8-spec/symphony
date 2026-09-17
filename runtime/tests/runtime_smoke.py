@@ -107,7 +107,8 @@ def main():
                         print("IPV6_CGROUP_CANARY_PASS; OUTSIDE_CANARY_CONNECTED", flush=True)
                     prepared, _ = rpc(root, request, raw)
                     require(prepared["phase"] == "prepared", "prepare_failed")
-                    require(rpc(root, request, raw)[0] == prepared, "prepare_not_idempotent")
+                    again, _ = rpc(root, request, raw)
+                    require({k: v for k, v in again.items() if k != "free_bytes"} == {k: v for k, v in prepared.items() if k != "free_bytes"}, "prepare_not_idempotent")
                     bound = dict(interval=request["interval"], generation=request["generation"])
                     running, _ = rpc(root, dict(action="start", active_seconds=120, **bound))
                     known = control / "known_hosts"
@@ -244,6 +245,32 @@ print('FILESYSTEM_BOUNDARY_PASS')
                     exported = Path(header(io.BytesIO(result))["ok"]["path"])
                     require(exported.read_bytes() == data and exported.stat().st_mode & 0o077 == 0, "controller_export_failed")
                     print("STOP_DESCENDANTS_EXPORT_PASS", flush=True)
+                    # Bootstrap has an empty workspace and preserves the prior export binding.
+                    login_id = "login-" + suffix
+                    rpc(root, {"action": "login_prepare", "generation": login_id, "ssh_public_key": public})
+                    login_bound = dict(interval=login_id, generation=login_id)
+                    login_proof, _ = rpc(root, dict(action="start", active_seconds=60, **login_bound))
+                    login_known = control / "login_known"
+                    login_known.write_text(f"[127.0.0.1]:{login_proof['port']} {login_proof['host_public_key']}\n")
+                    login_ssh = ["ssh", "-F", "/dev/null", "-T", "-p", str(login_proof["port"]), "-i", str(client_key),
+                                 "-oBatchMode=yes", "-oIdentitiesOnly=yes", "-oStrictHostKeyChecking=yes",
+                                 "-oUserKnownHostsFile=" + str(login_known), "worker@127.0.0.1"]
+                    for attempt in range(20):
+                        try:
+                            command([*login_ssh, "test ! -e /workspace/repo && codex login --help >/dev/null"])
+                            break
+                        except subprocess.CalledProcessError:
+                            if attempt == 19:
+                                raise
+                            time.sleep(0.2)
+                    command([*login_ssh, "umask 077; printf '{}' > /codex/auth.json"])
+                    rpc(root, dict(action="stop", **login_bound))
+                    restored, _ = rpc(root, {"action": "status"})
+                    require(restored["generation"] == bound["generation"], "login_lost_task_binding")
+                    require(not (root / "keys" / login_id).exists(), "bootstrap_keys_remain")
+                    require((root / "auth/auth.json").read_text() == "{}", "bootstrap_auth_not_saved")
+                    require(rpc(root, dict(action="export", sha=candidate, **bound))[1] == data, "login_changed_export")
+                    print("ISOLATED_LOGIN_AND_RESTORED_BINDING_PASS", flush=True)
                     # Reuse the same task workspace after acknowledged stop; preserve committed result.
                     request.update(interval="second", generation="h" + suffix)
                     rpc(root, request, raw)

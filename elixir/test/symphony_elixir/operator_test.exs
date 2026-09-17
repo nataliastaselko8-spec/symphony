@@ -244,6 +244,15 @@ defmodule SymphonyElixir.OperatorTest do
     refute View.project(%{}).available
     assert View.label("merge") == "Неизвестное действие"
 
+    for reason <- ~w(disk_space_low codex_login_required model_selection_required model_catalog_required
+                      model_catalog_refresh_required model_catalog_unavailable selected_model_unavailable
+                      selected_effort_unavailable model_application_mismatch codex_model_rerouted
+                      cycle_model_selection_changed worker_runtime_unavailable worker_network_not_ready
+                      worker_reconciliation_required worker_ownership_unknown worker_profile_mismatch worker_probe_failed
+                      pilot_not_selected pilot_finished) do
+      assert View.message(reason) != reason
+    end
+
     for reason <- [
           nil,
           [:criteria_required, "manual_dev_validation_required"],
@@ -300,6 +309,18 @@ defmodule SymphonyElixir.OperatorTest do
       assert view.available and not view.execution_enabled
       refute Map.has_key?(view, :gate)
       assert view.run_url == "https://github.com/ExampleOrg/app/actions/runs/20"
+      enabled = Map.merge(status, %{execution_enabled: true, runtime_readiness: %{ready: true, model: nil}})
+      assert View.project(enabled).execution_enabled
+      if state == paused, do: assert(View.project(enabled).queue == "Пауза оператора")
+      assert View.project(%{enabled | reason: :worker_runtime_unavailable}).reason != ""
+
+      if state["baseline"] && state["cycle"] == nil && state["operator_pause"] == nil do
+        ready_view = View.project(%{enabled | reason: :environment_not_ready})
+        refute ready_view.reason =~ "Исполнение задач пока отключено"
+      end
+
+      blocked_view = View.project(%{enabled | runtime_readiness: %{ready: false, reasons: ["model_selection_required"]}})
+      if state["operator_pause"] == nil, do: assert(blocked_view.queue =~ "Выберите модель и усиление")
 
       if state == working do
         assert view.budget.remaining["initial_ms"] == 0
