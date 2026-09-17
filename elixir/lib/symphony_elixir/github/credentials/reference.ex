@@ -30,6 +30,8 @@ defmodule SymphonyElixir.GitHub.Credentials.Reference do
         }
 
   @profiles %{
+    projects_write: %{"organization_projects" => "write", "issues" => "read", "metadata" => "read"},
+    publication: %{"issues" => "write", "pull_requests" => "write", "metadata" => "read"},
     projects_read: %{"organization_projects" => "read", "issues" => "read", "contents" => "read", "metadata" => "read"},
     delivery_read: %{"actions" => "read", "pull_requests" => "read", "contents" => "read", "metadata" => "read"},
     github: %{"issues" => "write", "pull_requests" => "write", "contents" => "read", "metadata" => "read"},
@@ -139,14 +141,14 @@ defmodule SymphonyElixir.GitHub.Credentials.Reference do
 
   defp valid_repo?(_repo), do: false
 
-  defp valid_organization?(_repo, nil, profile), do: profile != :projects_read
+  defp valid_organization?(_repo, nil, profile), do: profile not in [:projects_read, :projects_write]
 
   defp valid_organization?(repo, organization, _profile) when is_binary(organization),
     do: String.downcase(hd(String.split(repo, "/"))) == String.downcase(organization)
 
   defp valid_organization?(_repo, _organization, _profile), do: false
 
-  defp valid_project_number?(nil, profile), do: profile != :projects_read
+  defp valid_project_number?(nil, profile), do: profile not in [:projects_read, :projects_write]
   defp valid_project_number?(number, _profile), do: is_integer(number) and number > 0
 
   defp absolute_path?(path) when is_binary(path),

@@ -47,6 +47,31 @@ defmodule SymphonyElixir.GitHubProjects.Delivery do
     _, _ -> Observation.failure(client.settings, context, :delivery_read_failed)
   end
 
+  @doc "Accept only the expected Status change of one row; all other watched pointers must match."
+  @spec watch_transition(Config.Schema.t(), map(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def watch_transition(config, context, expected, row, opts) do
+    with {:ok, settings} <- Config.delivery_observer_settings(config),
+         client = Client.new(settings, Keyword.put(opts, :deadline_ms, 30_000)),
+         {:ok, repo} <- repository(client),
+         {:ok, pointers} <- pointers(client, context, repo),
+         [current] <- Enum.filter(pointers.ownership["project"]["items"], &(&1["item_id"] == row["item_id"])),
+         true <- without_status(current) == without_status(row),
+         true <- current["state"] == settings.project.states["working"],
+         rows = Enum.map(pointers.ownership["project"]["items"], &mask_row(&1, row)),
+         masked = put_in(pointers, [:ownership, "project", "items"], rows),
+         true <- watch_digest(masked) == expected do
+      {:ok, %{"watch_digest" => watch_digest(pointers), "row" => current}}
+    else
+      _ -> {:error, :remote_conditions_changed}
+    end
+  end
+
+  defp mask_row(value, row), do: if(value["item_id"] == row["item_id"], do: row, else: value)
+
+  defp without_status(row) do
+    row |> Map.drop(~w(state eligible)) |> Map.update!("native_ref", &Map.delete(&1, "status_option_id"))
+  end
+
   defp gather(client, context) do
     with {:ok, repo} <- repository(client),
          {:ok, policy} <- Policy.load(client),

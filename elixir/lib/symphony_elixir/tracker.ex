@@ -69,7 +69,7 @@ defmodule SymphonyElixir.Tracker do
 
   @spec execute_bound_agent_tool(map(), String.t(), term(), keyword()) :: map()
   def execute_bound_agent_tool(
-        %{adapter: adapter, tracker_settings: tracker_settings},
+        %{adapter: adapter, tracker_settings: tracker_settings} = binding,
         tool,
         arguments,
         opts \\ []
@@ -78,7 +78,7 @@ defmodule SymphonyElixir.Tracker do
       adapter,
       tool,
       arguments,
-      Keyword.put(opts, :tracker_settings, tracker_settings)
+      opts |> Keyword.put(:tracker_settings, tracker_settings) |> Keyword.put(:delivery, Map.get(binding, :delivery))
     )
   end
 

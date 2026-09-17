@@ -1,11 +1,11 @@
 defmodule SymphonyElixir.GitHubProjects.Adapter do
   @moduledoc """
-  Read-only GitHub Projects tracker. Execution is disabled until rollout gates exist.
+  GitHub Projects reads and controller-bound task tools. Live execution remains disabled.
   """
 
   @behaviour SymphonyElixir.Tracker
 
-  alias SymphonyElixir.GitHubProjects.Client
+  alias SymphonyElixir.GitHubProjects.{AgentTool, Client}
   alias SymphonyElixir.Tracker.Issue
 
   @spec validate_config(map()) :: :ok | {:error, term()}
@@ -21,5 +21,8 @@ defmodule SymphonyElixir.GitHubProjects.Adapter do
   def secret_environment_names(tracker_settings), do: Client.secret_environment_names(tracker_settings)
 
   @spec agent_tool_specs() :: [map()]
-  def agent_tool_specs, do: []
+  def agent_tool_specs, do: AgentTool.specs()
+
+  @spec execute_agent_tool(String.t(), term(), keyword()) :: map()
+  def execute_agent_tool(tool, arguments, opts), do: AgentTool.execute(tool, arguments, opts)
 end

@@ -8,6 +8,8 @@
 # Run separately with mix github_projects.delivery.inspect; no worker or store writes.
 # Internal lifecycle and bounded SYMPHONY_DELIVERY_CONTEXT hook input: docs/delivery_runtime.md.
 # Projects execution stays disabled; the product's executable workflow belongs in agent-runner.
+# Session-bound task tools and controller publication: docs/github_projects_publication.md.
+# project_handoff submits retained intent; only verified CI permits PR ready. Merge stays with the operator.
 tracker:
   kind: linear
   provider:

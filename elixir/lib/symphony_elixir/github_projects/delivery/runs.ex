@@ -190,6 +190,7 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Runs do
     with {:ok, tested_sha} <- tested_commit(client, run, pr, dev),
          :ok <- Policy.verify_sources(client, policy, tested_sha),
          {:ok, result} <- ci_result(client, run, policy.pr_jobs),
+         {:ok, failure_kind} <- failure_kind(client, run, policy.pr_jobs),
          {:ok, origin} <- origin(cycle, run, pr["head_sha"]) do
       fact =
         proof(run, client.settings.repo)
@@ -199,7 +200,8 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Runs do
           "result" => result,
           "head_sha" => pr["head_sha"],
           "base_sha" => dev,
-          "tested_sha" => tested_sha
+          "tested_sha" => tested_sha,
+          "failure_kind" => failure_kind
         })
 
       reasons = if result == "success", do: [], else: ["pr_ci_" <> result]
@@ -243,6 +245,19 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Runs do
     end
   end
 
+  defp failure_kind(client, %{"conclusion" => "failure"} = run, mapping) do
+    with {:ok, jobs} <- Client.list(client, :jobs, [run["id"], run["run_attempt"]]),
+         {:ok, bound} <- Evidence.bind_jobs(jobs, run, mapping) do
+      names = mapping["verify"].steps |> Enum.filter(fn {id, _} -> String.starts_with?(id, "check_") and id != "check_ci_gate" end) |> Enum.map(&elem(&1, 1))
+      steps = bound["verify"]["steps"] || []
+      first = Enum.find(steps, &(&1["conclusion"] not in ["success", "skipped"]))
+      code = is_map(first) and first["status"] == "completed" and first["conclusion"] == "failure" and first["name"] in names
+      {:ok, if(code, do: "verification", else: "unknown")}
+    end
+  end
+
+  defp failure_kind(_, _, _), do: {:ok, "unknown"}
+
   defp verify_ci_jobs(client, run, mapping) do
     with {:ok, jobs} <- Client.list(client, :jobs, [run["id"], run["run_attempt"]]),
          {:ok, bound} <- Evidence.bind_jobs(jobs, run, mapping) do
@@ -257,10 +272,20 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Runs do
 
     case matches do
       [%{"sha" => ^sha, "reservation_id" => id}] -> {:ok, %{"origin" => "reserved", "reservation_id" => id}}
+      [] -> unbound_origin(entries, sha, run["run_attempt"])
+      _ -> {:error, :ambiguous_ci_reservation}
+    end
+  end
+
+  defp unbound_origin(entries, sha, 1) do
+    case Enum.filter(entries, &(&1["run_id"] == nil and &1["sha"] == sha and &1["result"] in ~w(reserved unknown))) do
+      [%{"reservation_id" => id}] -> {:ok, %{"origin" => "reserved", "reservation_id" => id}}
       [] -> {:ok, %{"origin" => "external", "reservation_id" => nil}}
       _ -> {:error, :ambiguous_ci_reservation}
     end
   end
+
+  defp unbound_origin(_, _, _), do: {:ok, %{"origin" => "external", "reservation_id" => nil}}
 
   defp proof(run, repo) do
     %{

@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.DeliveryGate.State do
   @moduledoc "Pure delivery-cycle transitions. Inputs are verified controller facts, not GitHub responses."
 
-  alias SymphonyElixir.DeliveryGate.{Budget, Command}
+  alias SymphonyElixir.DeliveryGate.{Budget, Command, Effects}
 
   @budget_commands ~w(start_work checkpoint stop_work resolve_interval reserve_ci observe_ci external_ci begin_fix extend_budget confirm_ci_not_started)
   @budget_errors [:time_budget_exhausted, :fix_budget_exhausted, :ci_budget_exhausted, :retry_budget_exhausted]
@@ -17,8 +17,8 @@ defmodule SymphonyElixir.DeliveryGate.State do
   @spec admission(map(), String.t()) :: :ok | {:error, atom()}
   def admission(%{"status" => "idle", "cycle" => nil}, "new"), do: :ok
 
-  def admission(%{"cycle" => %{"task" => %{"item_id" => item}, "phase" => "reserved", "budget" => budget}}, item) do
-    if Budget.stopped?(budget) and not Budget.unresolved?(budget) and Budget.work_available?(budget),
+  def admission(%{"cycle" => %{"task" => %{"item_id" => item}, "phase" => "reserved", "budget" => budget} = cycle}, item) do
+    if quiet?(cycle) and Budget.work_available?(budget),
       do: :ok,
       else: {:error, :work_unresolved}
   end
@@ -46,7 +46,8 @@ defmodule SymphonyElixir.DeliveryGate.State do
         "block_reason" => nil,
         "cancellation" => nil,
         "recovery" => nil,
-        "suspended" => nil
+        "suspended" => nil,
+        "effects" => %{}
       }
 
       {:ok, %{state | "status" => "occupied", "cycle" => cycle}}
@@ -57,6 +58,41 @@ defmodule SymphonyElixir.DeliveryGate.State do
 
   defp transition(%{"cycle" => nil}, _, _), do: {:error, :no_active_cycle}
 
+  defp transition(state, action, args) when action in ~w(effect_request effect_submit effect_sent effect_confirm effect_candidate) do
+    with {:ok, cycle} <- Effects.apply_command(state["cycle"], action, args), do: put_cycle(state, cycle)
+  end
+
+  defp transition(state, "bind_pr", args) do
+    cycle = state["cycle"]
+    ci = Budget.latest_ci(cycle["budget"])
+
+    if Budget.stopped?(cycle["budget"]) and cycle["phase"] in ~w(awaiting_ci cancelling) and is_map(ci) and ci["sha"] == args["sha"] and
+         cycle["work"]["pr_number"] in [nil, args["pr_number"]] do
+      put_cycle(state, %{cycle | "work" => Map.merge(cycle["work"], %{"pr_number" => args["pr_number"], "head_sha" => args["sha"]})})
+    else
+      {:error, :pr_binding_not_allowed}
+    end
+  end
+
+  defp transition(state, "manual_ci", args) do
+    cycle = state["cycle"]
+    prior = Budget.latest_ci(cycle["budget"])
+    id = "manual-#{args["run_id"]}-#{args["run_attempt"]}"
+    request = %{"reservation_id" => id, "sha" => args["sha"], "retry" => true, "reason" => "Observed manual GitHub rerun"}
+    result = args |> Map.take(~w(run_id run_attempt result)) |> Map.put("reservation_id", id)
+
+    with true <- cycle["phase"] == "awaiting_ci" and cycle["cancellation"] == nil and is_map(prior),
+         true <- matching_rerun?(prior, args),
+         {:ok, budget} <- Budget.apply_command(cycle["budget"], "reserve_ci", request),
+         {:ok, budget} <- Budget.apply_command(budget, "observe_ci", result) do
+      put_cycle(state, %{cycle | "budget" => budget})
+    else
+      false -> {:error, :manual_ci_not_allowed}
+      {:error, reason} when reason in @budget_errors -> put_cycle(state, block(cycle, Atom.to_string(reason)))
+      error -> error
+    end
+  end
+
   defp transition(state, action, args) when action in @budget_commands do
     cycle = state["cycle"]
 
@@ -64,6 +100,7 @@ defmodule SymphonyElixir.DeliveryGate.State do
          {:ok, budget} <- Budget.apply_command(cycle["budget"], action, args) do
       phase = budget_phase_after(cycle["phase"], action)
       updated = %{cycle | "budget" => budget, "phase" => phase}
+      updated = if action == "begin_fix", do: Effects.finish_attempt(updated), else: updated
       updated = if Budget.exhausted?(budget), do: block(updated, "time_budget_exhausted"), else: updated
       {:ok, %{state | "cycle" => updated}}
     else
@@ -159,7 +196,7 @@ defmodule SymphonyElixir.DeliveryGate.State do
     cycle = state["cycle"]
 
     if cycle["cancellation"] == nil do
-      put_cycle(state, %{cycle | "cancellation" => args, "phase" => "cancelling", "block_reason" => "operator_cancel_requested"})
+      put_cycle(state, Effects.cancel(%{cycle | "cancellation" => args, "phase" => "cancelling", "block_reason" => "operator_cancel_requested"}))
     else
       {:error, :cancellation_already_requested}
     end
@@ -212,6 +249,7 @@ defmodule SymphonyElixir.DeliveryGate.State do
             "deployment" => nil,
             "validation" => nil,
             "block_reason" => nil,
+            "effects" => %{},
             "recovery" => Map.take(args, ["actor", "reason", "sha"]),
             "suspended" => cycle
         }
@@ -256,13 +294,18 @@ defmodule SymphonyElixir.DeliveryGate.State do
          args[bucket] > 0 do
       extension = Map.drop(args, ~w(sha head_sha pr_number))
       {:ok, budget} = Budget.apply_command(cycle["budget"], "extend_budget", extension)
-      put_cycle(state, %{cycle | "budget" => budget, "phase" => "reserved", "block_reason" => nil})
+      put_cycle(state, Effects.finish_attempt(%{cycle | "budget" => budget, "phase" => "reserved", "block_reason" => nil}))
     else
       {:error, :review_resume_not_allowed}
     end
   end
 
   defp transition(_, _, _), do: {:error, :invalid_phase}
+
+  defp matching_rerun?(prior, args) do
+    prior["run_id"] == args["run_id"] and prior["sha"] == args["sha"] and
+      is_integer(prior["run_attempt"]) and prior["run_attempt"] + 1 == args["run_attempt"]
+  end
 
   defp review_matches?(cycle, args) do
     cycle["phase"] == "awaiting_review" and cycle["cancellation"] == nil and
@@ -282,6 +325,7 @@ defmodule SymphonyElixir.DeliveryGate.State do
 
   defp budget_phase(cycle, "begin_fix", _) do
     cond do
+      Effects.sent?(cycle) -> {:error, :publication_unresolved}
       cycle["phase"] != "awaiting_ci" -> {:error, :invalid_phase}
       not match?(%{"result" => "failure"}, Budget.latest_ci(cycle["budget"])) -> {:error, :ci_failure_required}
       true -> :ok
@@ -308,7 +352,7 @@ defmodule SymphonyElixir.DeliveryGate.State do
     %{"branch" => args["branch"], "base_sha" => args["sha"], "head_sha" => nil, "pr_number" => nil, "merge_sha" => nil}
   end
 
-  defp quiet?(cycle), do: Budget.stopped?(cycle["budget"]) and not Budget.unresolved?(cycle["budget"])
+  defp quiet?(cycle), do: Budget.stopped?(cycle["budget"]) and not Budget.unresolved?(cycle["budget"]) and not Effects.unresolved?(cycle)
   defp put_cycle(state, cycle), do: {:ok, %{state | "cycle" => cycle}}
 
   defp block(cycle, reason) do

@@ -132,7 +132,7 @@ defmodule SymphonyElixir.GitHub.Credentials.Issuer do
   defp valid_account?(%{"login" => login, "type" => type}, owner, profile) when is_binary(login) do
     String.downcase(login) == String.downcase(owner) and
       type in ["User", "Organization"] and
-      (profile != :projects_read or type == "Organization")
+      (profile not in [:projects_read, :projects_write] or type == "Organization")
   end
 
   defp valid_account?(_account, _owner, _profile), do: false
