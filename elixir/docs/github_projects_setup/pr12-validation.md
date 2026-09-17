@@ -1,18 +1,18 @@
 # PR-12 — отчёт реализации и проверок
 
-Дата: 2026-09-17. Статус: код подготовлен; полная приёмка приложения остановлена
-на лимите одного файла 128 MiB. Запрошено решение о 256 MiB. До завершения приёмки
-PR12 не считается полностью готовым. Push/merge не выполнялись; реальные задачи
-Project не запускались.
+Дата: 2026-09-17. Статус: **PR12 прошёл локальную приёмку и готов к review владелицей**.
+Согласованный предел 256 MiB установлен; все 36 локальных шагов приложения прошли,
+остановка и изоляция подтверждены. Push/merge не выполнялись; реальные задачи Project
+не запускались. Публикация и hosted CI остаются действиями владелицы.
 
 ## Изменения и ревизии
 
 | Компонент | Ревизия / назначение |
 | --- | --- |
-| agent-runner | `agent/feat/emotionstat-workflow`, `dac14becd5bf2658a4233a025c690669441f783b` |
-| Symphony companion | `agent/fix/worker-bundle-transfer`, код `1d74115c12b43599db8c4356f55d6e1dbbff62f8` |
+| agent-runner | `agent/feat/emotionstat-workflow`, `f5f7140f556db6996ff7717677b565418e6ae46c` |
+| Symphony companion | `agent/fix/worker-bundle-transfer`, код `1f6944c5a47021408487212d29b142d7c8c6c1e5` |
 | Приложение для проверки | `a880e7811742458ac5492023ebfa882cc0a3d4a1`, неизменённый bundle локального dev |
-| Project image | `sha256:30f98cdfd41218a180ee2aaa4004d37362b4f0364e02ff2ee0513292d66241ac` |
+| Project image | `sha256:0965d96f3b1b6fd616355de0e3a747951f005eb7aeb203e32cf62af88fd2192e` |
 | Base PR11 image | `sha256:6145ad195c748056819a1cac5f99d49012801cb8a2b7db002aaf8f95b800533d` |
 | Node image | `docker.io/library/node@sha256:152aceace5c03e2597988763165ee33e3fd3633636db0fc983cd2e126b02cfde` |
 
@@ -54,12 +54,20 @@ Windows CRLF-копия не используется для вычислени�
 | Build source/portability | PASS: чужой SHA/dirty tree отклонены, личных путей нет, config проверен с временными путями |
 | Symphony make all | PASS: 552 Elixir tests, 0 failures, 6 skipped; format/specs/Credo/Dialyzer |
 | Python checks Symphony | PASS: 8 store, 9 publisher, 31 runtime tests |
-| Project image / PR11 smoke | PASS, включая controller loss 45,42 s, guardian crash/restart и удаление scoped firewall |
-| Команды приложения в контейнере | BLOCKED: workerd 151 356 536 bytes превышает предел одного файла 134 217 728 bytes |
-| Отмена verification | PASS, stop подтверждён; незавершённая работа сохранена |
+| Project image / PR11 smoke | PASS: файл 144 MiB разрешён, выше 256 MiB — EFBIG; host filesystem/network недоступны |
+| Stop/recovery | PASS: descendants/export/deadline, controller loss 45,47 s, guardian crash/restart; scoped firewall удалён |
+| Публичный HTTPS | PASS при успешном curl; управляющий SSH принял только ограниченный протокол |
+| Команды приложения в контейнере | PASS: 36 локальных шагов за 230,04 s; API Docker build — отдельный `ci_only` |
+| Handoff-check | PASS: тот же SHA, чистый worktree, полный текущий отчёт |
+| Отмена verification | PASS: реальный stop подтверждён, дочерний процесс остановлен, незавершённая работа сохранена |
 
 Unit tests профиля проверяют orchestration команд на fixtures; они не заменяют
 следующую контейнерную приёмку. Product tests не выполнялись на controller host.
+
+Полный успешный запуск включает CI helper tests, установку API, ruff/format/unittest,
+offline Alembic, web npm ci/lint/tests/translations/build/Wrangler dry-run, D1 local
+migrations, установку и `verify` всех десяти Cloudflare Worker packages. Общий отчёт —
+`passed_local`; это не утверждение об уже прошедшем hosted CI или здоровье deployed dev.
 
 ## Исправления, найденные на настоящем приложении
 
@@ -75,11 +83,20 @@ Unit tests профиля проверяют orchestration команд на fix
    бинарник `@cloudflare/workerd-linux-64` 1.20260820.1 занимает 151 356 536 bytes
    (около 144 MiB), лимит PR11 — 128 MiB. Последующие шаги отмечены `not_run`.
    Лимит не обходился установкой на host или использованием чужого volume.
-   Предложение для решения владелицы: 256 MiB на файл, с сохранением 2 GiB/2 CPU,
-   лимита Git bundle 80 MiB и остальных границ; затем повтор полной приёмки.
+   Владелица явно согласовала 256 MiB на файл. Изменение реализовано с сохранением
+   2 GiB/2 CPU, лимита Git bundle 80 MiB и остальных границ. Новый canary проверяет
+   разрешённый размер workerd и фактический отказ ядра выше 256 MiB.
+5. В smoke исправлено ложное сообщение PUBLIC_HTTPS_PASS после ошибки curl:
+   теперь оно возможно только при успешном HTTP-запросе. Допускаются два ограниченных
+   повтора сетевой операции, итоговая неудача завершает smoke ошибкой.
 
 Сохранённый отчёт неуспешного запуска находится в тестовой WSL2:
 `/home/symphony-worker/pr12-acceptance-ipq6jeru/workspaces/pr12-d3ca6ec7b26e/.emotionstat/verification.json`.
+После согласованного исправления успешный отчёт:
+`/home/symphony-worker/pr12-acceptance-xowqlszn/workspaces/pr12-48a1a953ea9b/.emotionstat/verification.json`.
+Текстовые логи финального повторения: `/tmp/symphony-pr12-256-acceptance.log`,
+`/tmp/symphony-pr12-256-smoke.log` в worker WSL; `/tmp/symphony-pr12-256-make-all.log`
+в controller WSL. Для будущей установки источник версий — таблица выше, не имена этих каталогов.
 Это путь evidence на данной машине, не default конфигурации других разработчиков.
 После проверки добавлен синтетический файл незавершённой работы для canary отмены;
 он сохранён после stop. Отчёт предыдущего SHA не разрешает handoff грязного workspace.
@@ -89,6 +106,8 @@ Unit tests профиля проверяют orchestration команд на fix
 Требуются чистые checkout закреплённых ревизий, подготовленный root-owned package
 Symphony на worker host, принятые base/Node images и app bundle от controller.
 Имена аккаунтов, пути package/bundle и distro выбирает локальная установка.
+Для contract checks нужен checkout точного `symphony_commit` из profile-lock;
+последующие документационные коммиты ветки не заменяют этот pin.
 
 ```bash
 SYMPHONY_SOURCE="$SYMPHONY_ROOT" python3 -I -B -m unittest discover -s tests -v
@@ -109,7 +128,7 @@ Smoke удаляет только свои ресурсы; app acceptance сох
 ## Порядок публикации и оставшиеся границы
 
 1. Владелица публикует companion ветку Symphony в личный fork. Runner CI обращается
-   к commit `1d74115`, поэтому он должен быть доступен на GitHub. При squash, меняющем
+   к commit `1f6944c`, поэтому он должен быть доступен на GitHub. При squash, меняющем
    этот SHA, перед удалением ветки согласовать новый pin и повторить contract/image checks.
 2. Владелица публикует `agent/feat/emotionstat-workflow` в `EmotionStat/agent-runner`,
    создаёт PR в `main` и проверяет hosted CI. Hosted Actions в этой сессии не запускались.

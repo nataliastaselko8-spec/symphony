@@ -1,16 +1,18 @@
 #### Context
 
-The PR12 application bundle stalled before worker preparation because one raw socket write could send only part of the frame.
+PR12 exposed partial Git-bundle socket writes and a file-size limit too small for workerd. The owner approved a 256 MiB limit.
 
 #### TL;DR
 
-*Complete partial socket writes before reading a response; retain existing protocol and isolation limits.*
+*Complete Git-bundle writes and allow 256 MiB task files while retaining container isolation.*
 
 #### Summary
 
 - Write complete headers and bodies through the management relay and smoke client.
 - Reject writes that make no progress; retain the 80 MiB bundle limit and existing timeouts.
 - Cover partial writes and a real 3.5 MB management relay round trip.
+- Raise the approved task file limit to 256 MiB and test the actual kernel boundary inside the container.
+- Require successful curl completion for the public HTTPS smoke result.
 - Record PR12's portable profile, validation results and remaining PR13 integration work.
 
 #### Alternatives
@@ -23,4 +25,5 @@ The PR12 application bundle stalled before worker preparation because one raw so
 - [x] 552 Elixir tests, 0 failures, 6 skipped; format, specs, Credo and Dialyzer passed.
 - [x] 31 Python runtime tests, including the multi-megabyte relay round trip.
 - [x] PR12 image isolation, network, controller loss, guardian restart and verification cancellation checks.
-- [ ] Full app acceptance is blocked by the existing 128 MiB file limit; see pr12-validation.md.
+- [x] A 144 MiB file succeeds and a file above 256 MiB is rejected inside the isolated worker.
+- [x] All 36 local app verification steps and handoff-check passed in the isolated PR12 image.
