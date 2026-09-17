@@ -16,7 +16,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from symphony_runtime.common import digest, require
-from symphony_runtime.guardian import header, receive, send_header
+from symphony_runtime.guardian import header, receive, send_bytes, send_header
 from symphony_runtime.host import HostSession
 
 
@@ -34,7 +34,7 @@ def rpc(root, request, body=b""):
         connection.connect(str(root / "control.sock"))
         stream = connection.makefile("rwb", buffering=0)
         send_header(stream, request)
-        stream.write(body)
+        send_bytes(stream, body)
         result = header(stream)
         require("error" not in result, str(result))
         return result["ok"], receive(stream, result["body_size"])

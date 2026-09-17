@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from symphony_runtime import config, cli
 from symphony_runtime.client import accept_export
 from symphony_runtime.common import Rejected, atomic, canonical, command, digest, locked, no_links, private_dir, private_file, read_json
-from symphony_runtime.guardian import Guardian, MAX_BUNDLE, header, public_key, receive, send_header
+from symphony_runtime.guardian import Guardian, MAX_BUNDLE, header, public_key, receive, send_bytes, send_header
 from symphony_runtime.network import Firewall
 
 
@@ -183,6 +183,57 @@ class RuntimeTest(unittest.TestCase):
                 header(io.BytesIO(raw))
         with self.assertRaises(Rejected):
             receive(io.BytesIO(), MAX_BUNDLE + 1)
+
+    def test_framing_handles_short_writes_and_rejects_no_progress(self):
+        class ShortWriter(io.BytesIO):
+            def write(self, raw):
+                return super().write(raw[:7])
+        frame = ShortWriter()
+        raw = b"large-frame" * 10000
+        send_header(frame, {"body_size": len(raw)})
+        send_bytes(frame, raw)
+        frame.seek(0)
+        self.assertEqual(header(frame), {"body_size": len(raw)})
+        self.assertEqual(receive(frame, len(raw)), raw)
+        for stalled in (None, 0, -1):
+            with patch.object(frame, "write", return_value=stalled), self.assertRaisesRegex(Rejected, "incomplete_frame_write"):
+                send_bytes(frame, b"x")
+
+    def test_management_relay_transfers_multi_megabyte_bundle(self):
+        raw = b"bundle-payload" * 250000
+        failures = []
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+            server.bind(str(self.root / "control.sock"))
+            server.listen(1)
+            server.settimeout(10)
+
+            def respond():
+                try:
+                    connection, _ = server.accept()
+                    with connection, connection.makefile("rwb", buffering=0) as stream:
+                        connection.settimeout(5)
+                        request = header(stream)
+                        self.assertEqual(receive(stream, request["bundle_size"]), raw)
+                        send_header(stream, {"ok": {"sha256": digest(raw)}, "body_size": len(raw)})
+                        send_bytes(stream, raw)
+                except BaseException as error:
+                    failures.append(error)
+
+            thread = threading.Thread(target=respond, daemon=True)
+            thread.start()
+            frame = io.BytesIO()
+            send_header(frame, {"action": "prepare", "bundle_size": len(raw)})
+            send_bytes(frame, raw)
+            relay = Path(__file__).resolve().parents[1] / "scripts/worker-control.py"
+            result = subprocess.run([sys.executable, "-I", "-B", str(relay), "--root", str(self.root)],
+                                    input=frame.getvalue(), capture_output=True, timeout=15)
+            thread.join(timeout=10)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(failures, [])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            response = io.BytesIO(result.stdout)
+            self.assertEqual(header(response), {"ok": {"sha256": digest(raw)}, "body_size": len(raw)})
+            self.assertEqual(receive(response, len(raw)), raw)
 
     def test_public_key_does_not_accept_ssh_options(self):
         import base64

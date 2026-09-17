@@ -36,11 +36,20 @@ def header(stream):
     return value
 
 
+def send_bytes(stream, raw):
+    """Raw socket streams may accept only part of a frame in one write."""
+    pending = memoryview(raw)
+    while pending:
+        written = stream.write(pending)
+        require(type(written) is int and 0 < written <= len(pending), "incomplete_frame_write")
+        pending = pending[written:]
+    stream.flush()
+
+
 def send_header(stream, value):
     raw = canonical(value)
     require(len(raw) <= MAX_HEADER, "response_header_too_large")
-    stream.write(struct.pack("!I", len(raw)) + raw)
-    stream.flush()
+    send_bytes(stream, struct.pack("!I", len(raw)) + raw)
 
 
 def public_key(value):
@@ -324,8 +333,7 @@ def serve(guardian, stop_event=None):
                     require(type(size) is int and 0 <= size <= MAX_BUNDLE, "invalid_body_size")
                     value, body = guardian.dispatch(request, receive(self.rfile, size))
                     send_header(self.wfile, {"ok": value, "body_size": len(body)})
-                    self.wfile.write(body)
-                    self.wfile.flush()
+                    send_bytes(self.wfile, body)
                 except (Rejected, OSError, ValueError) as exc:
                     reason = str(exc) if isinstance(exc, Rejected) else "guardian_io_error"
                     send_header(self.wfile, {"error": reason, "body_size": 0})
