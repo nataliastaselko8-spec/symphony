@@ -2,7 +2,7 @@
 
 **Подключение deployment evidence (PR-05 и последующие этапы):** инструкции controller, дашборда и приёмки запуска перенесены в [отдельный документ Symphony](github_projects_setup/deployment-evidence-integration.md). Текущая рабочая папка — `D:/symphony`; `D:/fork/_symphony/symphony` в более ранних записях ниже — прежнее расположение. Контракт отчёта и эксплуатация deployment workflow остаются в `EmotionStat/app`.
 
-Обновлено: 2026-09-17. **PR-02–PR-10 приняты; PR-11 подготовлен локально** в `agent/feat/portable-worker-runtime` от `main` (`df918b9`). Реализованы переносимые config/launcher, изолированный Podman worker, ограниченный SSH, watchdog, остановка и Git bundle transport. [Контракт и инструкция PR-11](../../runtime/README.md), [отчёт проверок](github_projects_setup/pr11-validation.md). Исполнение реальных Projects остаётся отключено до PR-13; профиль и hooks — PR-12. Push и merge выполняет владелица. PR-01 отложен до итогового обновления базы знаний. Нумерация этапов отличается от номеров GitHub PR; старые записи ниже сохраняют историю.
+Обновлено: 2026-09-17. **PR-02–PR-11 приняты:** локальный `main` содержит merge PR-11 `e9d9363`. Реализованы переносимые config/launcher, изолированный Podman worker, ограниченный SSH, watchdog, остановка и Git bundle transport. [Контракт и инструкция PR-11](../../runtime/README.md), [отчёт проверок](github_projects_setup/pr11-validation.md). **PR12 реализован и прошёл локальную приёмку: 36 шагов приложения, hooks, handoff, изоляция и отмена проверены с согласованным пределом файла 256 MiB. Готов к review; push/merge и hosted CI ещё не выполнялись. Следующий этап после принятия — PR13.** [План PR12](github_projects_setup/pr12-execution-plan.md), [результаты](github_projects_setup/pr12-validation.md). Companion Symphony `1f6944c` содержит исправление передачи Git-bundle и новый предел файла; он требуется для профиля. Исполнение реальных Projects остаётся отключено до PR-13. Push и merge выполняет владелица. PR-01 отложен до итогового обновления базы знаний. Нумерация этапов отличается от номеров GitHub PR; старые записи ниже сохраняют историю.
 
 **Изменение очередности по решению владелицы 2026-09-15:** сейчас knowledge-base не изменяем. PR-01 отложен, его объём объединяется с итоговым PR-15 после реализации и проверки пилота либо фиксации его остановки. Первый этап реализации — PR-02 в выбранном форке Symphony; ожидать PR-01 не требуется. Нумерация этапов сохранена для существующих ссылок. Новые решения, вопросы и результаты проверок записываются в этих двух планах и документации соответствующих кодовых PR; подтверждённые итоги затем переносятся в базу знаний одним согласованным обновлением. Обязательная документация поведения/config в Symphony и agent-runner обновляется вместе с кодом.
 
@@ -442,26 +442,30 @@ deployment/artifact/policy; до validation свидетельство дейс�
 
 ### PR-12 — Настроить EmotionStat WORKFLOW и безопасные git hooks
 
-**Repo/base:** `EmotionStat/agent-runner` → `main`. **Title:** `Define the EmotionStat task workflow and dev-based git hooks`.
+**Repo/base:** `EmotionStat/agent-runner` → `main`. **Title:** `Define the EmotionStat workflow and isolated task hooks`.
 
-**Цель / было → станет:** repo-native правила и команды app входят в исполняемый профиль без копирования scheduler; каждая task branch и push имеют проверяемое назначение.
+**Подробный план для валидации:** [PR-12 — шаги, файлы, проверки и границы PR-13](github_projects_setup/pr12-execution-plan.md).
 
-**Объём и файлы:** `EmotionStat/agent-runner` хранит переносимый `WORKFLOW.template.md`, `scripts/hooks/` и проектные правила без личных путей/accounts. Текущая папка разработки `D:/agent-runner` не является обязательной. Configure из fork формирует локальный исполняемый WORKFLOW по объявленным полям и передаёт его абсолютный путь Symphony. Добавить примеры и local-remote harness; README/runner.example.yaml поясняют профиль и ссылку на общий launcher PR-11. До PR-12 отсутствие профиля диагностируется без автоматического выбора fixture.
+**Цель / было → станет:** правила app, hooks и проверки входят в переносимый проектный профиль. GitHub credentials и публикация остаются у controller; рабочий startup подключается в PR-13.
 
-- App-only Project1; Ready/Working active, Done terminal; explicit yes; `max_concurrent_agents=1`, один repo cycle, `validation.mode=manual`, отдельный store и pilot `item_ids`.
-- Hooks читают JSON context PR-08. Новая работа: проверить origin, fetch `origin/dev`, сверить expected SHA, создать уникальную `agent/...` ветку. Continuation: восстановить прежнюю branch/open PR без reset/recreation.
-- Если dev продвинулся при открытом PR, после допуска текущего владельца fetch актуальный dev и включить его изменения обычным merge в ту же task branch; не переписывать историю, не делать force push и не создавать второй PR. При конфликтах сохранить работу, разрешить их в scope задачи либо передать оператору; перед публикацией повторить необходимые проверки и PR CI. Этот merge направлен в task branch, а не в dev. Для обычной задачи основание должно быть подтверждённым здоровым dev; явно назначенное recovery сохраняет своё исключение.
-- Push только `HEAD:refs/heads/<проверенная-ветка-задачи>`; запрет dev/main, foreign branch/remote, force/delete/mirror обходов. PR base строго dev; fresh-state/gate check перед публикацией, recovery exception сохраняется.
-- Проектный шаблон WORKFLOW использует app AGENTS/README и реальные acceptance commands; команды/тексты из issue не вставляются в shell hooks. Шаблон и hooks принадлежат agent-runner, исполняемый файл создаётся в local config; копия в app не создаётся.
-- Исправить `workspaces/README.md`: нынешнее «disposable after handoff» заменить правилами сохранения workspace/ветки при review, retry и recovery до допустимого cleanup после завершения цикла.
+**Объём и файлы:** `WORKFLOW.template.md`, `scripts/hooks/`, `scripts/checks/`, производный `worker/Containerfile`, тесты и README/security/workspace policy. Текущая папка `D:/agent-runner` не является обязательной. Штатный renderer Symphony создаёт исполняемый WORKFLOW вне git; второй launcher или интерпретатор конфигурации в runner не создаётся.
+
+- App-only Project1; Ready/Working active, Done terminal; explicit yes; `max_concurrent_agents=1`, один repo cycle и существующая ручная validation. В поставке `item_ids: []`; controller сохраняет прежние бюджеты. Не добавлять в YAML поля, которые Config не читает.
+- Controller получает проверенный dev и передаёт bundle через PR-11. Hook в контейнере читает JSON context PR-08, сверяет SHA и создаёт назначенную `agent/...` ветку. Сетевых fetch/push и GitHub credentials у worker нет.
+- Continuation сохраняет прежние ветку/PR/workspace. Обновлённый dev доставляется новым bundle; обычный merge идёт в task branch. Конфликт и dirty worktree сохраняются для разрешения, без reset/clean/rebase/force push или второго PR. Recovery допускает только controller.
+- Передача через `project_prepare_pr`/`project_handoff`, затем подтверждённый stop/export PR-11 и publisher PR-09. Только controller публикует закреплённую task branch с PR base dev после свежей проверки gate.
+- Hooks и build-зависимости API входят в производный image, без подключения host checkout/home/socket. Локально выполняются поддерживаемые реальные проверки app; Docker build остаётся обязательным в Actions и помечается `CI_ONLY`, а не локальным успехом.
+- Prompt использует AGENTS/README app. Текст issue не исполняется как shell. Workspace сохраняется во время CI/review/recovery/отмены до разрешённого controller cleanup.
 
 **Зависимости:** PR-08, PR-09, PR-11. O5 фиксирует фактические серверные rules и ограничения выбранного тарифа. Отсутствие branch protection компенсируется для агента изоляцией credentials и конечным controller publisher; hooks сами по себе не ограничивают GitHub-токен и не запрещают действия владельца.
 
-**Проверки/evidence:** bare local test remote с dev/main; две последовательные задачи получают разные ветки; dev продвинулся во время review, merge в прежнюю task branch и повтор проверок, конфликт без потери коммитов и дубликата PR; stale local dev; fetch failure; wrong upstream/push.default; retry после потерянного ответа push; open versus merged PR; hostile JSON strings; защищённые refs не меняются.
+**Проверки/evidence:** template через реальные renderer/Config Symphony; Git bundle fixtures и local bare remote; new/continue/recovery/конфликт/отмена; stale SHA и hostile JSON; неизменность dev/main; честный отчёт локальных проверок/CI_ONLY; повтор isolation/stop acceptance для производного image; другой пользователь и пути. Реальные GitHub mutations и model turns не нужны.
 
-**Владелец валидирует:** текст WORKFLOW, какие действия агенту разрешены, момент handoff и ручные критерии завершения.
+**Владелец валидирует:** текст WORKFLOW, доставка hooks внутри image, границы локальных проверок/Actions, сохранение работы и передача controller.
 
-**Готовность:** локально доказаны branch/push invariants и восстановление. **Stop:** тест требует пробного запрещённого push в живую dev/main либо hook сбрасывает существующую работу.
+**Готовность:** профиль и hooks отдельно проверены в контейнере; live execution по-прежнему запрещён. **Stop:** проверки требуют GitHub credentials/host mounts/Docker socket у worker, запрещённого push в живую dev/main или потери существующей работы.
+
+**Явные зависимости PR-13:** согласовать `/workspace/repo` transport с `<workspace.root>/<issue-key>` обычного lifecycle; связать новый seed с expected dev при сохранении task base; проверить profile/image pins; добавить типизированный локальный pilot filter; подключить callbacks, heartbeat и Codex login. PR-12 не маскирует эти разрывы symlink или вторым checkout.
 
 ### PR-13 — Проверить упакованную систему и зафиксировать pin
 
@@ -474,6 +478,7 @@ deployment/artifact/policy; до validation свидетельство дейс�
 - Проверить запускаемый артефакт выбранного runtime, finite dry-run и все startup paths. Для Burrito учитывать CLI-routing application callback, не требуя невозможного «application callback никогда не вызывался».
 - Проверить согласованный в PR-11/PR-12 deployment manifest: Symphony commit/artifact digest, agent-runner revision и версия конфигурации. После merge этого PR оператор в O7 создаёт локальный deployment manifest вне git с точными итоговыми ревизиями и digest; это устраняет невозможность записать в PR хеш собственного будущего merge. Начальный pin PR-11/PR-12 остаётся пригодным только для инспекции. Launcher не включает исполнение без проверенного итогового manifest и не подменяет его moving branch.
 - Обычный запуск github_projects разрешить только при наличии всей интеграции, корректного gate/store, manual operator path и профиля. Незавершённые ранние сборки остаются inspection-only.
+- Закрыть конкретные точки интеграции из [плана PR-12, §13](github_projects_setup/pr12-execution-plan.md#13-явные-точки-интеграции-pr-13): единый подготовленный cwd для lifecycle/hooks/Codex/export, принятый project image, fresh-dev seed для continuation, явный типизированный pilot filter и callbacks/heartbeat. Файл шаблона сам по себе этого не обеспечивает.
 
 **Зависимости:** PR-04, PR-05, PR-10, PR-11, PR-12. Тесты каждого изменения уже прошли в своих PR.
 

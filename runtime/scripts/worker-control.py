@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from symphony_runtime.common import private_dir, require
-from symphony_runtime.guardian import MAX_BUNDLE, header, receive, send_header
+from symphony_runtime.guardian import MAX_BUNDLE, header, receive, send_bytes, send_header
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--root", required=True)
@@ -22,7 +22,7 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
     client.connect(str(root / "control.sock"))
     stream = client.makefile("rwb", buffering=0)
     send_header(stream, request)
-    stream.write(body)
+    send_bytes(stream, body)
     response = header(stream)
     send_header(sys.stdout.buffer, response)
-    sys.stdout.buffer.write(receive(stream, response.get("body_size", 0)))
+    send_bytes(sys.stdout.buffer, receive(stream, response.get("body_size", 0)))
