@@ -471,7 +471,7 @@ deployment/artifact/policy; до validation свидетельство дейс�
 
 **Repo/base:** `nataliastaselko8-spec/symphony` → `main`. **Title:** `Integrate the isolated GitHub Projects execution lifecycle`.
 
-**Подробный план для валидации:** [PR13 — интеграция, последовательность изменений, проверки и приёмка](github_projects_setup/pr13-execution-plan.md). План подготовлен; реализация PR13 не начата.
+**Подробный план:** [PR13 — интеграция, последовательность изменений, проверки и приёмка](github_projects_setup/pr13-execution-plan.md). Реализация и локальная приёмка завершены 2026-09-18: [результаты и pins](github_projects_setup/pr13-validation.md), [запуск, модель и усиление](github_projects_setup/pr13-runtime-guide.md). Ожидается review владелицей; push/merge и live-пилот не выполнялись.
 
 **Цель / было → станет:** отдельно проверенные компоненты соединяются в рабочий startup/lifecycle и проходят один воспроизводимый сценарий в выбранной упаковке. Это кодовая интеграция, а не только снятие inspection guard и повтор тестов.
 

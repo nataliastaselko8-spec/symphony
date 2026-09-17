@@ -25,6 +25,32 @@ PR13 связывает controller, worker, GitHub Projects и delivery gate. Р
 Перед передачей роли нужно остановить прежний controller и перенести проверенное
 состояние, сохранив цикл и бюджеты; новый пустой store для обхода ожидания запрещён.
 
+Производный образ собирает host-пользователь worker из чистого checkout профиля:
+
+```bash
+python3 -I -B "$PROJECT_PROFILE/worker/build.py" \
+  --revision "$ACCEPTED_PROJECT_PROFILE_COMMIT" --base-image "$ACCEPTED_BASE_IMAGE_ID" \
+  --tag "$LOCAL_PROJECT_IMAGE_TAG"
+```
+
+Чтобы старые образы этой установки могли освобождать место автоматически, используйте
+собственный namespace. Вычисление выполняется **под worker account** для его state root:
+
+```bash
+IMAGE_NAMESPACE=$(python3 -I - "$RUNTIME/lib" "$WORKER_STATE" <<'PY'
+import pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from symphony_runtime.images import namespace
+print(namespace(pathlib.Path(sys.argv[2])).removesuffix(':'))
+PY
+)
+python3 -I -B "$PROJECT_PROFILE/worker/build.py" \
+  --revision "$ACCEPTED_PROJECT_PROFILE_COMMIT" --base-image "$ACCEPTED_BASE_IMAGE_ID" \
+  --installation "$IMAGE_NAMESPACE" --tag "$IMAGE_NAMESPACE:accepted"
+```
+
+Общий base image и образы без метки владения установка самостоятельно не удаляет.
+
 ## Локальный профиль
 
 Все пути, имена WSL-дистрибутивов и Linux-учётных записей задаёт разработчик.
