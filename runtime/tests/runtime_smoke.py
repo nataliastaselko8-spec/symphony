@@ -124,7 +124,7 @@ def main():
                     paths = [str(sentinel), str(control / "key"), account.pw_dir, "/mnt/c", "/mnt/d", "/mnt/wsl", "/mnt/wslg",
                              "/run/WSL", "/usr/lib/wsl", "/var/run/docker.sock", f"/run/user/{account.pw_uid}/podman/podman.sock"]
                     # Feed inert Python through SSH stdin; no interpolated shell statements or credentials.
-                    script = """import os, pathlib, json, subprocess
+                    script = """import errno, os, pathlib, json, resource, signal, subprocess
 paths = json.loads(%r)
 for target in paths:
     path = pathlib.Path(target)
@@ -147,6 +147,23 @@ assert 'CapEff:\\t0000000000000000' in status
 assert 'NoNewPrivs:\\t1' in status and 'Seccomp:\\t2' in status
 assert os.getuid() == 10001
 assert os.environ['CODEX_HOME'] == '/codex'
+assert resource.getrlimit(resource.RLIMIT_FSIZE) == (268435456, 268435456)
+probe = pathlib.Path('/workspace/fsize-probe')
+previous_signal = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+try:
+    with probe.open('xb') as output:
+        # Sparse data verifies the actual kernel boundary without allocating 256 MiB.
+        output.seek(151356535)
+        output.write(b'x')
+        output.flush()
+        assert probe.stat().st_size == 151356536
+        try: os.ftruncate(output.fileno(), 268435457)
+        except OSError as error: assert error.errno == errno.EFBIG
+        else: raise AssertionError('file_limit_not_enforced')
+finally:
+    probe.unlink(missing_ok=True)
+    signal.signal(signal.SIGXFSZ, previous_signal)
+print('FILE_SIZE_LIMIT_256_MIB_PASS')
 subprocess.run(['codex', '--version'], check=True)
 subprocess.run(['python3.11', '--version'], check=True)
 subprocess.run(['uv', '--version'], check=True)
@@ -181,7 +198,7 @@ print('FILESYSTEM_BOUNDARY_PASS')
                         rules = command(["iptables-nft", "-v", "-x", "-n", "-L", host.firewall.chain])
                         require(any(line.split()[0].isdigit() and int(line.split()[0]) > 0 and "REJECT" in line for line in rules.splitlines()), "no_firewall_rejection_evidence")
                         print("PASTA_PRIVATE_NETWORK_PASS; OUTSIDE_CANARY_CONNECTED", flush=True)
-                    print(command([*ssh, "curl --fail --silent --show-error --max-time 15 --output /dev/null https://registry.npmjs.org/; printf PUBLIC_HTTPS_PASS"]), flush=True)
+                    print(command([*ssh, "curl --fail --silent --show-error --retry 2 --retry-all-errors --max-time 15 --output /dev/null https://registry.npmjs.org/ && printf PUBLIC_HTTPS_PASS"]), flush=True)
                     # Management endpoint accepts framed status and ignores arbitrary SSH command requests.
                     with socket.socket() as reserve:
                         reserve.bind(("127.0.0.1", 0))

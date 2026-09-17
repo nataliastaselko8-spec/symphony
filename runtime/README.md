@@ -38,9 +38,11 @@ state/keys, сокеты Docker/Podman, SSH agent или GitHub-токен. `/us
 Внешний task-порт выбирает Podman на loopback; management-порт задаёт локальный config.
 Ограничения: capabilities отключены, `no-new-privileges`, seccomp Podman,
 частные PID/IPC/mount/network namespaces, 2 CPU, 2 GiB, 512 процессов,
-256 MiB `/tmp`, 64 MiB временный home, 128 MiB на отдельный создаваемый файл.
+256 MiB `/tmp`, 64 MiB временный home, 256 MiB на отдельный создаваемый файл.
 Task volume сохраняется; его общий размер этим лимитом не ограничен. Свободное место
 необходимо контролировать на worker host. Изменение профиля ресурсов требует повторной приёмки.
+Предел файла повышен со 128 до 256 MiB по решению владелицы при приёмке PR12:
+бинарник workerd требует около 144 MiB. Предел Git bundle остаётся 80 MiB.
 
 Новые соединения к приватным, loopback, link-local, multicast и адресам интерфейсов
 хоста блокируются отдельно для cgroup службы. Публичный интернет разрешён, DNS —

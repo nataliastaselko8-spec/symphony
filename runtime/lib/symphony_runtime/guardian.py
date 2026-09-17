@@ -104,7 +104,7 @@ class Guardian:
         args = ["run", "--name", name, "--pull=never", "--userns=keep-id:uid=10001,gid=10001",
                 "--user=10001:10001", "--read-only", "--cap-drop=all", "--security-opt=no-new-privileges",
                 "--cgroupns=private", "--pid=private", "--ipc=private", "--pids-limit=512", "--memory=2g", "--cpus=2",
-                "--ulimit=fsize=134217728:134217728",
+                "--ulimit=fsize=268435456:268435456",
                 "--cgroup-parent=" + self.cgroup + "/payload", "--tmpfs=/tmp:rw,nosuid,nodev,size=256m,mode=1777",
                 "--tmpfs=/home/worker:rw,nosuid,nodev,size=64m,mode=1777"]
         if network:
