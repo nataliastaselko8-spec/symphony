@@ -480,7 +480,22 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
   end
 
   test "one owner retains work and budget through normal continuation", c do
-    runtime = boot(c)
+    parent = self()
+    hold_observation = start_supervised!({Agent, fn -> false end}, id: :hold_observation)
+
+    observer = fn settings, opts ->
+      if Agent.get(hold_observation, & &1) do
+        send(parent, {:continuation_observation, self()})
+
+        receive do
+          :continue -> :ok
+        end
+      end
+
+      c.opts[:observer].(settings, opts)
+    end
+
+    runtime = boot(c, observer: observer)
     reserve(runtime)
     {pid, handle} = start_worker(runtime)
     assert handle.context["mode"] == "new"
@@ -497,8 +512,13 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
     assert {:error, :cycle_occupied} = DeliveryRuntime.dispatch(runtime, issue("B"), nil, fn _ -> :ok end)
     {next, continued} = start_worker(runtime)
     assert continued.context["mode"] == "continue"
+    Agent.update(hold_observation, fn _ -> true end)
     send(next, :finish)
-    await(runtime, &(&1.worker == nil))
+    assert_receive {:continuation_observation, reader}, 2_000
+    assert DeliveryRuntime.status(runtime).worker == nil
+    assert {:error, :observation_required} = DeliveryRuntime.cleanup(runtime, "/work/GHP-6974656d2d41")
+    send(reader, :continue)
+    ready(runtime)
     assert {:error, :workspace_cycle_retained} = DeliveryRuntime.cleanup(runtime, "/work/GHP-6974656d2d41")
   end
 
