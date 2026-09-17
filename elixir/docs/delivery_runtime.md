@@ -90,7 +90,10 @@ workspace/hook/app-server runtime отмечает внешние эффекты
 actor, reason и положительное расширение текущего бюджета. Оно возвращает ту же задачу,
 ветку и PR в `reserved`, сохраняя расходы. Обычный `resume` не получил обхода review.
 Назначенный recovery использует свою ветку от текущего dev и сохраняет suspended owner.
-Кнопки и аутентификация оператора — PR-10.
+Кнопки и аутентификация оператора реализованы в [PR-10](operator_dashboard.md).
+Разрешающие действия повторяют полную сверку вне GenServer и проверяют версию/сессию
+перед записью; ограничивающие действия сохраняются без чтения GitHub. Пауза запрещает
+новые публикации; уже отправленные операции всё равно требуют сверки результата.
 
 ## Контекст hooks
 
@@ -123,7 +126,7 @@ root и worker mapping требуют restart. Некорректный или �
 закрывает допуск. Последний корректный файл остаётся доступным для диагностики, но
 не отменяет `restart_required`. Автоматическое обновление installation token не меняет scope.
 
-В fingerprint добавлены `runtime_contract=1`, `item_ids`, `required_labels` и manual
+В PR-08 в fingerprint добавлены `runtime_contract=1`, `item_ids`, `required_labels` и manual
 validation mode. Поэтому store PR-06/07 имеет несовместимый scope. **Автоматической
 миграции нет.** Старые current/previous/lock сохраняются, загрузка возвращает
 `recovery_required`. Нельзя удалять или менять hash ради открытия очереди. До пилота
@@ -135,7 +138,9 @@ validation mode. Поэтому store PR-06/07 имеет несовместим
 `DeliveryRuntime.status/1` и поле `delivery` внутреннего `Orchestrator.snapshot/2` содержат
 состояние Gate, owner/task, фазу, бюджет, worker interval/status, причину остановки,
 наблюдение и его возраст, `restart_required`, `execution_enabled: false`.
-Логи остановки содержат issue/interval IDs. Полноценной новой панели и operator API пока нет.
+Логи остановки содержат issue/interval IDs. PR-10 добавляет защищённую панель и
+allowlisted JSON-проекцию; универсального HTTP-вызова `DeliveryRuntime.command` нет.
+Текущая версия scope — `runtime_contract=3`, `operator_contract=local-v2`.
 
 Для локального `remove_recorded` в Projects сохраняется проверка текущего workspace root;
 сохранённый путь не разрешает удалить одноимённую папку за его пределами. Remote transport
@@ -143,8 +148,13 @@ validation mode. Поэтому store PR-06/07 имеет несовместим
 
 `deployment success`, readiness по артефакту и ручная validation остаются отдельными
 состояниями. `resume_queue_before_dev_validation` не превращается в ошибку кода.
-После снятия паузы старый артефакт не обновляется; источник свежего состояния Queue
-остаётся решением до PR-10/пилота. Этот PR не обращается к Cloudflare.
+После снятия паузы старый артефакт не обновляется. В PR-10 выбран отдельный ручной
+источник: форма Queue/Scheduler, связанная с проверенным proof/artifact/policy.
+До ручной validation она действует 30 минут; после принятия — для той же базы.
+Runtime использует общую проверку `QueueConfirmation` при poll, показе и отправке
+форм. Изменение контекста/expiry сохраняется через Gate, restore и сообщение о
+проблеме аннулируют свидетельство. [Полный контракт](operator_dashboard.md).
+Cloudflare API не вызывается; новая форма сама по себе очередь задач не открывает.
 
 Проверки: реальные OTP процессы и Linux store, контролируемые часы, сбои записи/чтения,
 одноразовые разрешения, отмена/late watch, supervisor restart, ожидание CI/deployment,

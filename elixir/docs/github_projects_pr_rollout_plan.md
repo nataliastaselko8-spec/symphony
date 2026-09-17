@@ -2,17 +2,17 @@
 
 **Подключение deployment evidence (PR-05 и последующие этапы):** инструкции controller, дашборда и приёмки запуска перенесены в [отдельный документ Symphony](github_projects_setup/deployment-evidence-integration.md). Текущая рабочая папка — `D:/symphony`; `D:/fork/_symphony/symphony` в более ранних записях ниже — прежнее расположение. Контракт отчёта и эксплуатация deployment workflow остаются в `EmotionStat/app`.
 
-Обновлено: 2026-09-17. **PR-02–PR-08 приняты; PR-09 подготовлен локально** в `agent/feat/github-projects-handoff` от `main` (`68dde15`). PR-04/PR-05 приняты в приложении: текущий deployment и evidence проверены через GitHub App. [Контракт PR-08](delivery_runtime.md) описывает допуск и остановку; [контракт PR-09](github_projects_publication.md) — ограниченные инструменты, публикацию и восстановление. Push и merge выполняет владелица. PR-01 отложен; PR-10–PR-15 и пилот ещё предстоят. Идентификаторы этапов не совпадают с номерами GitHub PR; исторические записи ниже сохраняют состояние на свою дату.
+Обновлено: 2026-09-17. **PR-02–PR-09 приняты; PR-10 подготовлен локально** в `agent/feat/operator-dashboard` от `main` (`16488fd`). [Контракт PR-10](operator_dashboard.md) описывает вход, решения и тестовое демо; по решению владелицы в этот же PR включено отдельное ручное подтверждение Queue/Scheduler с последующей validation dev. PR-04/PR-05 приняты в приложении. Push и merge выполняет владелица. PR-01 отложен; PR-11–PR-15 и пилот ещё предстоят. Идентификаторы этапов не совпадают с номерами GitHub PR; исторические записи ниже сохраняют состояние на свою дату.
 
 **Изменение очередности по решению владелицы 2026-09-15:** сейчас knowledge-base не изменяем. PR-01 отложен, его объём объединяется с итоговым PR-15 после реализации и проверки пилота либо фиксации его остановки. Первый этап реализации — PR-02 в выбранном форке Symphony; ожидать PR-01 не требуется. Нумерация этапов сохранена для существующих ссылок. Новые решения, вопросы и результаты проверок записываются в этих двух планах и документации соответствующих кодовых PR; подтверждённые итоги затем переносятся в базу знаний одним согласованным обновлением. Обязательная документация поведения/config в Symphony и agent-runner обновляется вместе с кодом.
 
-Технический контракт описан в [плане адаптера](github_projects_adapter_plan.md). Этот документ задаёт границы изменений, зависимости, доказательства готовности и операторские шаги. Интерактивная панель — [макет](github_projects_ui/recovery-interface-preview.html); рядом сохранены [desktop](github_projects_ui/manual-validation-desktop.png) и [mobile](github_projects_ui/manual-validation-mobile.png) изображения. Чтение Project и конечная инспекция реализованы в PR-02. Серверные операции панели и исполнение задач новым runtime пока не реализованы.
+Технический контракт описан в [плане адаптера](github_projects_adapter_plan.md). Этот документ задаёт границы изменений, зависимости, доказательства готовности и операторские шаги. Исходный [макет](github_projects_ui/recovery-interface-preview.html) сохранён; действующая панель и локальное демо описаны в [контракте PR-10](operator_dashboard.md). Чтение Project и конечная инспекция реализованы в PR-02. Исполнение реальных задач новым runtime пока отключено.
 
 ## 1. Что уже известно и что остаётся pending
 
 | Вопрос | Состояние на дату плана | Следствие |
 | --- | --- | --- |
-| Symphony | `D:/symphony`, PR-09 в `agent/feat/github-projects-handoff` от `main` (`68dde15`) | Все дальнейшие изменения Symphony выполнять здесь; PR направлять в личный fork с базой `main` |
+| Symphony | `D:/symphony`, PR-10 в `agent/feat/operator-dashboard` от `main` (`16488fd`) | Все дальнейшие изменения Symphony выполнять здесь; PR направлять в личный fork с базой `main` |
 | agent-runner | `D:/agent-runner`, default branch `main` | Служебные PR направляются в `main` |
 | Knowledge-base | `D:/work/EmotionStat/knowledge-base`, default branch `main` | Изменения отложены; согласованные итоги реализации и пилота объединяются в PR-15 в `main` |
 | Приложение | `D:/EmotionStat_app/app`, локальная ветка `dev` | Все предлагаемые app PR направляются в `dev`; default branch проверить через GitHub |
@@ -370,13 +370,24 @@ flowchart TD
 
 ### PR-10 — Добавить защищённые operator actions в существующий dashboard
 
+Подробный [план выполнения PR-10](github_projects_setup/pr10-execution-plan.md) подготовлен
+2026-09-17 по реализации PR-09. Владелица согласовала ручной источник подтверждения
+Queue/Scheduler; он добавлен в той же ветке PR-10, с обновлением плана до кода.
+
+Основная реализация подготовлена локально: [контракт и запуск демо](operator_dashboard.md),
+[проверки](github_projects_setup/pr10-validation.md), [описание PR](github_projects_setup/pr10-description.md).
+Validation и завершение атомарны; отрицательное решение хранится отдельным
+`environment_problem`. Queue подтверждается отдельной формой с привязкой к проверенному
+deployment/artifact/policy; до validation свидетельство действует 30 минут. Расширенный repair UI
+ожидает production verifier. Реальное исполнение не включено.
+
 **Repo/base:** `nataliastaselko8-spec/symphony` → `main`. **Title:** `Add authenticated recovery and manual dev validation controls`.
 
 **Цель / было → станет:** макет превращается в небольшую рабочую панель с проверяемым серверным actor; success Actions сам не открывает очередь.
 
 **Объём и файлы:** `elixir/lib/symphony_elixir_web/endpoint.ex`, `router.ex`, `live/dashboard_live.ex`, `presenter.ex`, один auth plug и control handler, config/session code; controller/LiveView tests.
 
-- Один настроенный operator principal — владелица проекта, подтвердившая, что сама выполняет роль оператора. Реальные credentials/session, случайный signing secret вместо известной заглушки, CSRF/Origin checks и авторизация каждого mutation path. Её человеческий actor отделён от GitHub App bot; App не подтверждает собственный результат. Не строить платформу пользователей/RBAC.
+- Один настроенный operator principal — владелица проекта, подтвердившая, что сама выполняет роль оператора. Реальные credentials/session, CSRF/Origin checks и авторизация каждого mutation path. Обычный `HttpServer` уже генерирует случайный signing secret; исключить запуск operator mode с конфигурационной заглушкой и `check_origin=false`. Её человеческий actor отделён от GitHub App bot; App не подтверждает собственный результат. Не строить платформу пользователей/RBAC.
 - Все команды идут единственному владельцу store: bootstrap/reconciliation, назначение существующей recovery issue, принятие manual validation; pause/cancel/repair доступны только через описанные узкие операторские переходы, не raw editing JSON.
 - Форма «Подтвердить ручную проверку dev»: критерии, result, обязательный комментарий/evidence. Сервер заново проверяет deployment/finalizers, dev SHA, run/attempt, cycle version; actor/time не принимаются из клиента как доказательство.
 - Отрицательная validation оставляет блокировку, не создаёт issue; recovery назначается отдельно существующей Ready/yes карточке в item scope. При pre-merge owner положительный результат возвращает A, не B.
@@ -506,7 +517,7 @@ flowchart TD
 | Существующий terminal cleanup удаляет workspace до учёта нового постоянного цикла | PR-08 ставит store/reconciliation перед всеми путями cleanup; Done не удаляет незавершённую работу |
 | Открытый PR может отстать от dev из-за изменений других участников | PR-12 обновляет ту же task branch обычным merge dev, сохраняет историю и повторяет проверки |
 | Hooks сейчас выполняются через `sh -lc` с cwd, но без структурированных issue/gate данных | PR-08 вводит безопасный JSON context; PR-12 реализует idempotent new/continue/recovery hooks и проверку expected SHA |
-| Dashboard сейчас observability-only, без operator auth; config содержит известный signing secret и `check_origin=false` | PR-10 включает реальный auth/session/CSRF/Origin и серверный actor; O2 обеспечивает OS isolation. Никакого предположения «localhost значит авторизован» |
+| Dashboard сейчас observability-only, без operator auth; `HttpServer` уже генерирует случайный signing key, но config сохраняет placeholder и `check_origin=false` | PR-10 включает auth/session/CSRF/Origin, исключает placeholder для operator mode и задаёт серверный actor; PR-11/O2 проверяет OS isolation. Localhost не доказывает авторизацию |
 | Название пути `D:/...` не доказывает совместимость нативного runtime с Linux shell-командами | В O0 подтверждён WSL2; PR-11 проверяет Linux controller и отдельного worker внутри WSL2, зависимости и пути. Windows-каталог исходников не становится Linux-путём без явного сопоставления |
 | Один работающий агент не означает один незавершённый PR/цикл | PR-06/PR-08 сохраняют repo owner через review/deployment; worker не занят ожиданием |
 | Admission только перед стартом не приостанавливает уже работающую обычную задачу | PR-08 добавляет explicit pause/retry barrier; recovery использует свой допуск без изменения глобального `dispatchable` |

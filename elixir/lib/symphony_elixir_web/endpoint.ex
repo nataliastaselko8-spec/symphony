@@ -8,11 +8,13 @@ defmodule SymphonyElixirWeb.Endpoint do
   @session_options [
     store: :cookie,
     key: "_symphony_elixir_key",
-    signing_salt: "symphony-session"
+    signing_salt: "symphony-session",
+    http_only: true,
+    same_site: "Strict"
   ]
 
   socket("/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]],
+    websocket: [connect_info: [session: @session_options], max_frame_size: 65_536],
     longpoll: false
   )
 
@@ -22,6 +24,7 @@ defmodule SymphonyElixirWeb.Endpoint do
   plug(Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
+    length: 65_536,
     json_decoder: Jason
   )
 

@@ -1,4 +1,6 @@
 defmodule SymphonyElixirWeb.Presenter do
+  alias SymphonyElixir.Operator.View
+
   @moduledoc """
   Shared projections for the observability API and dashboard.
   """
@@ -24,6 +26,7 @@ defmodule SymphonyElixirWeb.Presenter do
           codex_totals: snapshot.codex_totals,
           rate_limits: snapshot.rate_limits
         }
+        |> delivery_payload(Map.get(snapshot, :delivery))
 
       :timeout ->
         %{generated_at: generated_at, error: %{code: "snapshot_timeout", message: "Snapshot timed out"}}
@@ -32,6 +35,9 @@ defmodule SymphonyElixirWeb.Presenter do
         %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
     end
   end
+
+  defp delivery_payload(payload, nil), do: payload
+  defp delivery_payload(payload, delivery), do: Map.put(payload, :delivery, View.project(delivery))
 
   @spec issue_payload(String.t(), GenServer.name(), timeout()) :: {:ok, map()} | {:error, :issue_not_found}
   def issue_payload(issue_identifier, orchestrator, snapshot_timeout_ms) when is_binary(issue_identifier) do

@@ -1,4 +1,5 @@
 defmodule SymphonyElixir.DeliveryRuntime.Policy do
+  alias SymphonyElixir.Operator.Decision
   @moduledoc "Admission policy for verified observations; no remote or store writes."
 
   alias SymphonyElixir.DeliveryGate.Command
@@ -10,6 +11,10 @@ defmodule SymphonyElixir.DeliveryRuntime.Policy do
 
   @spec admission(map(), map(), map(), Issue.t()) :: :ok | {:error, atom()}
   def admission(settings, state, observation, issue) do
+    if Decision.held?(state), do: {:error, :operator_hold}, else: admission_unheld(settings, state, observation, issue)
+  end
+
+  defp admission_unheld(settings, state, observation, issue) do
     cycle = state["cycle"]
     rows = observation.facts["project"]["items"] || []
     row = Enum.find(rows, &(&1["item_id"] == issue.id))

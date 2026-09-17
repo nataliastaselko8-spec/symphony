@@ -1,4 +1,6 @@
 defmodule SymphonyElixir.HttpServer do
+  alias SymphonyElixir.Operator.Auth
+
   @moduledoc """
   Compatibility facade that starts the Phoenix observability endpoint when enabled.
   """
@@ -24,14 +26,20 @@ defmodule SymphonyElixir.HttpServer do
         orchestrator = Keyword.get(opts, :orchestrator, Orchestrator)
         snapshot_timeout_ms = Keyword.get(opts, :snapshot_timeout_ms, 15_000)
 
-        with {:ok, ip} <- parse_host(host) do
+        config = Config.settings!()
+        server_settings = %{config.server | host: host, port: port}
+
+        with {:ok, ip} <- parse_host(host),
+             {:ok, operator} <- Auth.from_config(%{config | server: server_settings}) do
           endpoint_opts = [
             server: true,
             http: [ip: ip, port: port],
             url: [host: normalize_host(host)],
             orchestrator: orchestrator,
             snapshot_timeout_ms: snapshot_timeout_ms,
-            secret_key_base: secret_key_base()
+            secret_key_base: secret_key_base(),
+            operator_enabled: operator != nil,
+            check_origin: if(operator, do: [operator.origin], else: false)
           ]
 
           endpoint_config =

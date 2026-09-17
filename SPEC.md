@@ -1305,6 +1305,21 @@ native issue/PR association and readback of the Project status. With Actions rea
 operator reruns MUST be observed and charged to the retained budget; no rerun endpoint
 is exposed. See `elixir/docs/github_projects_publication.md` for the staged implementation.
 
+Operator controls MUST authenticate a configured human principal independently of tracker/App
+credentials, protect HTTP and LiveView mutations, and derive actor/time on the controller. A form
+MUST bind the current scope, cycle version and deployment/PR evidence; positive decisions require
+fresh observations and a final session/version check after network I/O. Restrictive pause, problem
+and cancellation decisions MAY persist without GitHub availability, but MUST target the current
+local version and retain unverified work. Replays MUST NOT duplicate budget or recovery grants.
+The Elixir operator contract applies validation and eligible cycle completion as one atomic Gate
+transition. It retains pause/problem holds without a cycle and invalidates baseline on restore.
+Old deployment artifacts MUST NOT stand in for fresh Queue readiness after manual intervention.
+The local operator may supplement verified inherited-pause evidence with manual Queue/Scheduler
+testimony bound to the same deployment, artifact and policy hashes. It MUST NOT override deployment
+failures or missing evidence. Application validation must follow within 30 minutes; accepted testimony
+persists for the validated deployment. Changed proof, operator-reported problems or restored state
+require reconfirmation. See `elixir/docs/operator_dashboard.md` for this contract and rollout boundary.
+
 When an implementation supports GitHub App authentication, bound sessions MUST retain an
 immutable App/installation and repository/Project scope while resolving current credentials
 for each request. Installation tokens MUST be treated as opaque strings, scoped explicitly,

@@ -1,4 +1,6 @@
 defmodule SymphonyElixir.DeliveryGate.Command do
+  alias SymphonyElixir.Operator.Decision
+
   @moduledoc """
   Closed, JSON-only vocabulary for trusted controller commands.
 
@@ -15,6 +17,7 @@ defmodule SymphonyElixir.DeliveryGate.Command do
   @recovery_limits Keyword.merge(@limits, initial_ms: :positive, ci_attempts: :positive)
   @ci_result {:enum, ["pending", "success", "failure", "cancelled", "unknown"]}
   @schemas %{
+    "invalidate_queue_confirmation" => [],
     "record_restore" => @operator,
     "bootstrap" => @proof ++ @operator ++ [criteria: :strings],
     "reserve" => @task ++ [cycle_id: :text, sha: :sha],
@@ -45,6 +48,8 @@ defmodule SymphonyElixir.DeliveryGate.Command do
   }
 
   @spec validate(String.t(), map()) :: :ok | {:error, atom()}
+  def validate("operator_decision", args), do: Decision.validate(args)
+
   def validate(action, args) when action in ~w(effect_request effect_submit effect_sent effect_confirm effect_candidate),
     do: Effects.validate(action, args)
 

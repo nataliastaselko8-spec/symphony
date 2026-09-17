@@ -3,6 +3,7 @@ defmodule SymphonyElixir.GitHubProjects.Delivery do
 
   alias SymphonyElixir.Config
   alias SymphonyElixir.GitHubProjects.Delivery.{Client, Observation, Ownership, Policy, Runs, Settings}
+  alias SymphonyElixir.GitHubProjects.Delivery.QueueConfirmation
 
   @spec observe(Config.Schema.t(), keyword()) :: {:ok, Observation.t()} | {:error, term()}
   def observe(config, opts \\ []) do
@@ -38,7 +39,7 @@ defmodule SymphonyElixir.GitHubProjects.Delivery do
 
   defp safely_observe(client, context) do
     case gather(client, context) do
-      {:ok, facts, reasons} -> Observation.new(client.settings, context, facts, reasons)
+      {:ok, facts, reasons} -> Observation.new(client.settings, context, facts, reasons) |> QueueConfirmation.apply(context.state, System.system_time(:millisecond))
       {:error, reason} -> Observation.failure(client.settings, context, reason)
     end
   rescue

@@ -1,4 +1,6 @@
 defmodule SymphonyElixir.DeliveryGate do
+  alias SymphonyElixir.Operator.Decision
+
   @moduledoc """
   Single writer for the durable repository cycle. Internal controller API only.
 
@@ -22,6 +24,13 @@ defmodule SymphonyElixir.DeliveryGate do
 
   @spec status(GenServer.server()) :: map()
   def status(server), do: GenServer.call(server, :status)
+
+  @doc "Controller-only bounded decision history and idempotency lookup."
+  @spec decisions(GenServer.server()) :: [map()]
+  def decisions(server), do: GenServer.call(server, :decisions)
+
+  @spec decision(GenServer.server(), String.t()) :: map() | nil
+  def decision(server, id), do: GenServer.call(server, {:decision, id})
 
   @spec execute(GenServer.server(), map(), String.t(), String.t(), map()) :: {:ok, map()} | {:error, atom()}
   def execute(server, version, id, action, args), do: GenServer.call(server, {:execute, version, id, action, args}, 15_000)
@@ -64,6 +73,9 @@ defmodule SymphonyElixir.DeliveryGate do
 
   @impl true
   def handle_call(:status, _from, state), do: {:reply, public_status(state), state}
+
+  def handle_call(:decisions, _from, state), do: {:reply, Enum.take(decisions_list(state), -50), state}
+  def handle_call({:decision, id}, _from, state), do: {:reply, Enum.find(decisions_list(state), &(&1["id"] == id)), state}
 
   def handle_call({:settings, proposed}, _from, state) do
     reply = if Settings.compatible?(state.settings, proposed), do: :ok, else: {:error, :restart_required}
@@ -181,6 +193,15 @@ defmodule SymphonyElixir.DeliveryGate do
 
   defp command_allowed(%{mode: mode}, _, _, _) when mode in [:store_unavailable, :recovery_required], do: {:error, mode}
   defp command_allowed(_, _, _, :replayed), do: :ok
+
+  defp command_allowed(state, "operator_decision", args, _) do
+    if Decision.restrictive?(args["kind"]) do
+      :ok
+    else
+      verified_operator(state, args["data"]["sha"])
+    end
+  end
+
   defp command_allowed(_, action, _, _) when action in @recovery_commands, do: :ok
 
   defp command_allowed(state, action, args, _) do
@@ -192,6 +213,12 @@ defmodule SymphonyElixir.DeliveryGate do
       else
         :ok
       end
+    end
+  end
+
+  defp verified_operator(state, sha) do
+    with :ok <- reconciled(state) do
+      if sha in [nil, state.verified_sha], do: :ok, else: {:error, :observation_sha_changed}
     end
   end
 
@@ -241,7 +268,7 @@ defmodule SymphonyElixir.DeliveryGate do
     valid_mode = valid_permit_mode?(mode, permit.activated)
 
     allowed =
-      state.mode not in [:store_unavailable, :recovery_required] and valid_mode and
+      state.mode not in [:store_unavailable, :recovery_required] and valid_mode and not Decision.held?(state.snapshot["state"]) and
         cycle["phase"] == "working" and cycle["cancellation"] == nil and
         get_in(cycle, ["budget", "interval", "id"]) == permit.interval and
         System.monotonic_time(:millisecond) < permit.deadline
@@ -283,4 +310,7 @@ defmodule SymphonyElixir.DeliveryGate do
   defp public_status(state) do
     %{version: version(state), mode: state.mode, state: if(state.snapshot, do: state.snapshot["state"], else: nil)}
   end
+
+  defp decisions_list(%{snapshot: nil}), do: []
+  defp decisions_list(state), do: Enum.filter(state.snapshot["commands"], &(&1["action"] == "operator_decision"))
 end
