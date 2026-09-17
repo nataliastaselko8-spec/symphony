@@ -22,6 +22,11 @@ records version-bound validation, pause, cancellation and recovery decisions in 
 It also records manual Queue/Scheduler readiness separately from deployment and application validation.
 An isolated demo is available; Projects-based agent execution is not enabled yet.
 
+The fork includes a [portable worker runtime](runtime/README.md): local configuration,
+read-only inspection, a rootless Podman worker, scoped network controls, verified stop
+and credential-free Git bundle transfer. Machine paths and WSL accounts are configured
+outside the checkout. Production Projects execution still requires the later startup integration.
+
 ## Running Symphony
 
 ### Requirements

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "role": "inspection",
+  "profile": "default",
+  "runtime_kind": "wsl2-podman",
+  "controller_distro": null,
+  "controller_user": null,
+  "worker_distro": null,
+  "worker_user": null,
+  "project_template": null,
+  "worker_host": "symphony-worker",
+  "management_host": "symphony-management",
+  "ssh_config": null,
+  "app_key": null,
+  "operator_credential": null,
+  "dashboard_port": 4080
+}
