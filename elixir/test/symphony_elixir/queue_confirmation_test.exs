@@ -61,6 +61,25 @@ defmodule SymphonyElixir.QueueConfirmationTest do
     assert View.project(%{status | observation: %{c.obs | reasons: []}}).reason =~ "Среда ещё не готова"
   end
 
+  test "missing observation disables confirmation even when prior Queue testimony is saved", c do
+    status = %{
+      gate: %{state: c.state},
+      observation: nil,
+      observation_age_ms: nil,
+      reason: :observation_required,
+      worker: nil,
+      restart_required: false
+    }
+
+    panel = View.project(status)
+    confirmation = Enum.find(panel.actions, &(&1.id == "confirm_queue"))
+    refute confirmation.enabled
+    assert panel.queue_confirmation == %{}
+    assert panel.deployment == %{}
+    assert {:error, :observation_required} = Policy.build(c.form, c.payload, nil, c.f.settings, c.state)
+    assert QueueConfirmation.apply(nil, c.state, c.now) == nil
+  end
+
   test "expiry, backwards clock, new attempt, digest and policy reject testimony; only accepted validation survives age", c do
     for now <- [c.now - 1, c.now + 1_800_000] do
       effective = QueueConfirmation.apply(c.obs, c.state, now)
@@ -145,7 +164,6 @@ defmodule SymphonyElixir.QueueConfirmationTest do
     end
 
     refute QueueConfirmation.candidate?(%{c.obs | complete: false})
-    assert QueueConfirmation.apply(nil, c.state, c.now) == nil
     assert {:error, :remote_delivery_blocked} = Policy.build(c.form, c.payload, %{c.obs | reasons: ["unexpected_pr"]}, c.f.settings, c.state)
 
     bad_http = fn request ->
