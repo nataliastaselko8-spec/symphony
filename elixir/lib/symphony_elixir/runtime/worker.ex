@@ -140,6 +140,7 @@ defmodule SymphonyElixir.Runtime.Worker do
       started: false,
       closing: false,
       finishing: false,
+      finish_request: nil,
       model_block: nil,
       timer: nil,
       report: %{ready: false, reasons: [:worker_reconciliation_required]}
@@ -209,6 +210,9 @@ defmodule SymphonyElixir.Runtime.Worker do
   def handle_call(_, _, state), do: {:reply, {:error, :worker_binding_changed}, state}
 
   @impl true
+  def handle_info(:poll, %{pending: nil, finishing: false, finish_request: {:last, last}} = state),
+    do: handle_info({:runtime_quiescent, last}, schedule_poll(state))
+
   def handle_info(:poll, %{pending: nil} = state) do
     state = state |> schedule_poll() |> check_shutdown_request()
 
@@ -237,8 +241,12 @@ defmodule SymphonyElixir.Runtime.Worker do
     report = completion_report(last, state.config.tracker.provider["repo"])
     action = %{"action" => "finish", "report" => report, "pilot_finished" => last != nil}
     task = Task.Supervisor.async_nolink(state.tasks, fn -> exchange(state.activation, action) end)
-    {:noreply, %{state | pending: %{task: task, action: action}, finishing: true, closing: true}}
+    pending = %{task: task, action: action}
+    {:noreply, %{state | pending: pending, finishing: true, closing: true, finish_request: {:last, last}}}
   end
+
+  def handle_info({:runtime_quiescent, last}, state),
+    do: {:noreply, %{state | finish_request: {:last, last}, closing: true}}
 
   def handle_info({ref, result}, %{pending: %{task: %{ref: ref}, action: action}} = state) do
     Process.demonitor(ref, [:flush])
@@ -308,7 +316,7 @@ defmodule SymphonyElixir.Runtime.Worker do
     path = Path.join(state.activation.proof["state_root"], "shutdown.request")
 
     with {:ok, raw} <- File.read(path), true <- byte_size(raw) < 1024, {:ok, %{"token" => token}} <- Jason.decode(raw), true <- token == state.activation.proof["launch_token"] do
-      :ok = DeliveryRuntime.shutdown(state.runtime)
+      send(state.runtime, :controller_shutdown)
       %{state | closing: true}
     else
       _ -> state

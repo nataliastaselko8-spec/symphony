@@ -342,6 +342,17 @@ class RuntimeTest(unittest.TestCase):
         self.assertFalse(cli.status(value)["running"])
         self.assertTrue(cli.stop_inspection(value)["stopped"])
 
+    def test_exited_unreaped_launcher_is_not_running(self):
+        value = self.configured()
+        process = subprocess.Popen(["/bin/true"])
+        try:
+            os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
+            fields = Path(f"/proc/{process.pid}/stat").read_text().split(") ", 1)[1].split()
+            atomic(Path(value["state_root"]) / "launcher.json", canonical({"pid": process.pid, "start": fields[19], "mode": "controller", "token": "fixture"}))
+            self.assertFalse(cli.status(value)["running"])
+        finally:
+            process.wait()
+
     def test_launcher_can_be_stopped_through_its_private_endpoint(self):
         value = self.configured()
         executable = Path(value["symphony_root"]) / "elixir/bin/symphony"

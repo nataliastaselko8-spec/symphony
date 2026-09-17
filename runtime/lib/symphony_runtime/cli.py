@@ -161,8 +161,8 @@ def status(config):
     require(set(record) == {"pid", "start", "mode", "token"} and type(record["pid"]) is int and record["pid"] > 1 and record["mode"] in ("inspection", "controller"), "invalid_launcher_record")
     try:
         process = Path(f"/proc/{record['pid']}")
-        current = process.joinpath("stat").read_text().split(") ", 1)[1].split()[19]
-        active = current == record["start"] and process.stat().st_uid == os.getuid()
+        fields = process.joinpath("stat").read_text().split(") ", 1)[1].split()
+        active = fields[0] not in ("Z", "X") and fields[19] == record["start"] and process.stat().st_uid == os.getuid()
     except (FileNotFoundError, ProcessLookupError):
         active = False
     return {"running": active, "execution_enabled": active and record["mode"] == "controller", "mode": record["mode"], "pid": record["pid"]}

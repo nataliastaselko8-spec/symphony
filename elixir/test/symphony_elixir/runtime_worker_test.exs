@@ -192,6 +192,24 @@ defmodule SymphonyElixir.RuntimeWorkerTest do
     assert Worker.format_status(%{}) == %{state: :runtime_worker_redacted}
   end
 
+  test "shutdown arriving during status polling is retained and completed exactly once", c do
+    Agent.update(c.replies, &Map.merge(&1, %{"status" => :wait, "finish" => :wait}))
+    send(c.worker, :poll)
+    assert_receive {:request, poller, %{"action" => "status"}}, 1000
+    send(c.worker, {:runtime_quiescent, nil})
+    assert :sys.get_state(c.worker).closing
+    send(poller, {:reply, {:ok, %{"ready" => true, "reasons" => []}}})
+    wait_ready(c.worker)
+    send(c.worker, :poll)
+    assert_receive {:request, finisher, %{"action" => "finish", "report" => nil}}, 1000
+    send(c.worker, {:runtime_quiescent, nil})
+    send(finisher, {:reply, {:ok, %{"stopped" => true}}})
+    wait_ready(c.worker)
+    send(c.worker, :poll)
+    refute_receive {:request, _, %{"action" => "finish"}}
+    assert :sys.get_state(c.worker).finishing
+  end
+
   test "failed finish is retried without declaring shutdown complete", c do
     Agent.update(c.replies, &Map.put(&1, "finish", {:error, :lost}))
     send(c.worker, {:runtime_quiescent, %{"id" => "cycle", "phase" => "cancelled"}})

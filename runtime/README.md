@@ -252,8 +252,8 @@ GitPublisher независимо проверяет историю и допу�
 `scripts/controller-transport.py --config <private transport.json>` через framed stdin/stdout.
 Transport config содержит `ssh_config`, `destination`, `export_directory`, `cycle`, `branch`,
 `interval`, `generation`; пути и scope задаёт controller, не модель. Runtime получает
-`stop_verifier`; publisher — `export_candidate` в своих options. PR-13 должен привязать
-эти callbacks к lifecycle. В PR13 `Runtime.Worker` использует `scripts/controller.py`
+`stop_verifier`; publisher — `export_candidate` в своих options. В PR13
+`Runtime.Worker` связывает lifecycle с `scripts/controller.py`
 с неизменяемыми привязками текущего interval; прежний ручной transport остаётся
 низкоуровневым контрактом и не включает допуск самостоятельно.
 

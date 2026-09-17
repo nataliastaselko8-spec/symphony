@@ -274,6 +274,9 @@ defmodule SymphonyElixir.DeliveryRuntime do
 
   def handle_info(:pump_effect, state), do: {:noreply, pump_effect(state)}
 
+  def handle_info(:controller_shutdown, state),
+    do: {:noreply, stop_worker(%{state | closing: true}, :controller_shutdown)}
+
   def handle_info(reason, state) when reason in [:runtime_activation_invalid, :runtime_worker_lost],
     do: {:noreply, stop_worker(block(state, Atom.to_string(reason)), reason)}
 

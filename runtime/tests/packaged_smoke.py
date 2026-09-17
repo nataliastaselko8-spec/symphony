@@ -56,7 +56,7 @@ def main():
             print("PASS PACKAGED_LOGIN_PAGE", flush=True)
             csrf = html.unescape(re.search(r'name="_csrf_token" value="([^"]+)"', login)[1])
             dashboard = page("/operator/login", {"_csrf_token": csrf, "credential": private_file(value["operator_credential"]).read_text().strip()})
-            require("Symphony" in dashboard and "_csrf_token" not in dashboard.split("<h1>")[-1][:100], "operator_login_failed")
+            require("Symphony" in dashboard and "Вход оператора" not in dashboard, "operator_login_failed")
             state = json.loads(page("/api/v1/state"))
             require(isinstance(state, dict), "dashboard_state_missing")
             (root / "packaged-dashboard.html").write_text(dashboard)
