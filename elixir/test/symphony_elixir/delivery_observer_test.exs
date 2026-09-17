@@ -4,7 +4,7 @@ defmodule SymphonyElixir.DeliveryObserverTest do
   alias SymphonyElixir.DeliveryGateSupport, as: Gate
   alias SymphonyElixir.DeliveryObserverSupport, as: F
   alias SymphonyElixir.GitHubProjects.Delivery
-  alias SymphonyElixir.GitHubProjects.Delivery.{Observation, Ownership, Runs, Settings}
+  alias SymphonyElixir.GitHubProjects.Delivery.{Client, Observation, Ownership, Runs, Settings}
 
   setup do
     cache = start_supervised!(F.Cache)
@@ -277,4 +277,55 @@ defmodule SymphonyElixir.DeliveryObserverTest do
   end
 
   defp context(state), do: %{version: %{epoch: "epoch-one", revision: 4}, mode: :needs_reconciliation, state: state}
+
+  test "only the expected status update refreshes a running interval watch", %{f: f, cache: cache} do
+    first = Map.put(F.item(), "state", "Ready for agent")
+    f = %{f | project: put_in(f.project, ["items"], [first, F.item("item-B", "issue-B")])}
+    ctx = context(Gate.initial())
+    {:ok, observation} = Delivery.observe(f.config, Keyword.put(F.opts(f, cache), :context, ctx))
+    row = hd(observation.facts["project"]["items"])
+    changed = put_in(f, [:project, "items", Access.at(0), "state"], "Agent working")
+    opts = F.opts(changed, cache)
+    assert {:ok, %{"watch_digest" => digest}} = Delivery.watch_transition(f.config, ctx, observation.facts["watch_digest"], row, opts)
+    refute digest == observation.facts["watch_digest"]
+    assert {:error, :remote_conditions_changed} = Delivery.watch_transition(f.config, ctx, "wrong", row, opts)
+    original_opts = F.opts(f, cache)
+    assert {:error, :remote_conditions_changed} = Delivery.watch_transition(f.config, ctx, digest, row, original_opts)
+  end
+
+  test "first CI binds its reservation; missing earlier attempts remain external", %{f: f, cache: cache} do
+    state = Gate.initial() |> Gate.apply!("reserve_ci", Gate.ci_request())
+    facts = publication_pr(f, cache)
+    run = F.ci_run()
+    inventory = %{workflow: F.workflow(11, run["path"]), runs: [run]}
+    assert {:ok, %{"origin" => "reserved"}, _} = Runs.ci(F.client(f, cache), inventory, f.policy, facts["pr"], state["cycle"], F.sha())
+    duplicate = put_in(state, ["cycle", "budget", "ci", "duplicate"], state["cycle"]["budget"]["ci"]["ci-1"])
+    assert {:error, :ambiguous_ci_reservation} = Runs.ci(F.client(f, cache), inventory, f.policy, facts["pr"], duplicate["cycle"], F.sha())
+    inventory = %{inventory | runs: [Map.put(run, "run_attempt", 2)]}
+    pending = put_in(inventory, [:runs, Access.at(0), "status"], "queued")
+    assert {:ok, %{"origin" => "external"}, _} = Runs.ci(F.client(f, cache), pending, f.policy, facts["pr"], state["cycle"], F.sha())
+  end
+
+  test "failed verification steps are distinguished from unknown infrastructure failures", %{f: f, cache: cache} do
+    facts = publication_pr(f, cache)
+    run = Map.put(F.ci_run(), "conclusion", "failure")
+    inventory = %{workflow: F.workflow(11, run["path"]), runs: [run]}
+    policy = put_in(f.policy, [:pr_jobs, "verify", :steps, "check_test"], "Application tests")
+    jobs = F.api_jobs(run, policy.pr_jobs)
+    jobs = Enum.map(jobs, fn job -> update_in(job, ["steps"], fn steps -> Enum.map(steps, &if(&1["name"] == "Application tests", do: Map.put(&1, "conclusion", "failure"), else: &1)) end) end)
+
+    opts =
+      Keyword.put(F.opts(f, cache), :http, fn request ->
+        if String.ends_with?(request[:url], "/jobs"), do: F.page("jobs", jobs, request), else: F.response(f, request)
+      end)
+
+    client = Client.new(f.settings, opts)
+    assert {:ok, %{"failure_kind" => "verification"}, _} = Runs.ci(client, inventory, policy, facts["pr"], Gate.reviewed()["cycle"], F.sha())
+  end
+
+  defp publication_pr(f, cache) do
+    ctx = context(Gate.reviewed())
+    {:ok, facts, _} = Ownership.observe(F.client(f, cache), ctx, %{"items" => [F.item()]}, [], F.repo(), F.sha())
+    facts
+  end
 end

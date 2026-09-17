@@ -12,7 +12,7 @@ defmodule SymphonyElixir.DeliveryGate do
 
   alias SymphonyElixir.DeliveryGate.{Budget, Settings, Snapshot, State, Store}
 
-  @recovery_commands ~w(checkpoint stop_work resolve_interval observe_ci external_ci block request_cancel confirm_ci_not_started)
+  @recovery_commands ~w(checkpoint stop_work resolve_interval observe_ci external_ci block request_cancel confirm_ci_not_started effect_request effect_submit effect_sent effect_confirm effect_candidate bind_pr manual_ci)
   @storage_errors [:store_changed, :store_unavailable, :store_operation_failed, :store_timeout]
 
   @spec start_link(keyword()) :: GenServer.on_start()

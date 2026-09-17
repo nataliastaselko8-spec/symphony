@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.GitHubProjects.Delivery.Observation do
   @moduledoc "Version-bound facts, never an execution permit or an operator decision."
 
-  alias SymphonyElixir.DeliveryGate.State
+  alias SymphonyElixir.DeliveryGate.{Budget, State}
   alias SymphonyElixir.GitHubProjects.Delivery.Policy
 
   @derive Jason.Encoder
@@ -67,7 +67,7 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Observation do
     end
   end
 
-  @doc "Pure command candidates for PR-08; no writes, budget reservation, validation or cycle release."
+  @doc "Pure controller command candidates; observation itself performs no writes or operator decisions."
   @spec commands(t(), map(), map()) :: {:ok, [map()]} | {:error, atom()}
   def commands(observation, settings, context) do
     with :ok <- validate(observation, settings, context),
@@ -84,7 +84,11 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Observation do
   defp command_candidates(facts, cycle) do
     ci = facts["ci"] || %{}
     pr = facts["pr"] || %{}
-    ci_command(ci) ++ merge_command(pr, cycle) ++ deployment_command(facts, cycle)
+
+    ci_command(ci) ++
+      external_ci_command(ci) ++
+      manual_ci_command(ci, cycle) ++
+      fix_command(ci, cycle) ++ merge_command(pr, cycle) ++ deployment_command(facts, cycle)
   end
 
   defp ci_command(%{"origin" => "reserved", "result" => result} = ci) when result in ~w(pending success failure cancelled) do
@@ -92,6 +96,30 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Observation do
   end
 
   defp ci_command(_), do: []
+
+  defp manual_ci_command(%{"origin" => "external", "result" => result} = ci, cycle) when result in ~w(pending success failure cancelled) do
+    prior = Budget.latest_ci(cycle["budget"])
+
+    if cycle["phase"] == "awaiting_ci" and cycle["cancellation"] == nil and is_map(prior) and
+         prior["sha"] == ci["sha"] and prior["run_id"] == ci["run_id"] and is_integer(prior["run_attempt"]) and prior["run_attempt"] + 1 == ci["run_attempt"] do
+      [%{action: "manual_ci", args: Map.take(ci, ~w(run_id run_attempt sha result))}]
+    else
+      []
+    end
+  end
+
+  defp manual_ci_command(_, _), do: []
+
+  defp external_ci_command(%{"origin" => "external", "run_id" => _, "run_attempt" => _, "sha" => _} = ci),
+    do: [%{action: "external_ci", args: Map.take(ci, ~w(run_id run_attempt sha))}]
+
+  defp external_ci_command(_), do: []
+
+  defp fix_command(%{"result" => "failure", "failure_kind" => "verification", "origin" => "reserved"}, cycle) do
+    if cycle["phase"] == "awaiting_ci" and cycle["cancellation"] == nil and map_size(Map.get(cycle, "effects", %{})) > 0, do: [%{action: "begin_fix", args: %{}}], else: []
+  end
+
+  defp fix_command(_, _), do: []
 
   defp merge_command(%{"state" => "merged", "ancestry" => "included"} = pr, cycle) do
     if cycle["work"]["merge_sha"] == nil and cycle["phase"] in ~w(awaiting_review cancelling) do

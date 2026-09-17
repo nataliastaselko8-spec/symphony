@@ -6,6 +6,8 @@ defmodule SymphonyElixir.DeliveryGate.Command do
   controller, never by worker tool arguments. No public endpoint is provided.
   """
 
+  alias SymphonyElixir.DeliveryGate.Effects
+
   @proof [sha: :sha, workflow_id: :positive, run_id: :positive, run_attempt: :positive]
   @operator [actor: :text, reason: :text]
   @task [item_id: :text, issue_id: :text, branch: :branch]
@@ -25,6 +27,8 @@ defmodule SymphonyElixir.DeliveryGate.Command do
     "confirm_ci_not_started" => @operator ++ [reservation_id: :text],
     "external_ci" => [run_id: :positive, run_attempt: :positive, sha: :sha],
     "begin_fix" => [],
+    "bind_pr" => [pr_number: :positive, sha: :sha],
+    "manual_ci" => [run_id: :positive, run_attempt: :positive, sha: :sha, result: @ci_result],
     "handoff" => [pr_number: :positive, sha: :sha],
     "merged" => [pr_number: :positive, sha: :sha],
     "deployment" => @proof ++ [result: {:enum, ["success", "failure", "unknown"]}, environment_ready: :boolean],
@@ -41,6 +45,9 @@ defmodule SymphonyElixir.DeliveryGate.Command do
   }
 
   @spec validate(String.t(), map()) :: :ok | {:error, atom()}
+  def validate(action, args) when action in ~w(effect_request effect_submit effect_sent effect_confirm effect_candidate),
+    do: Effects.validate(action, args)
+
   def validate(action, args) do
     case @schemas[action] do
       nil -> {:error, :unknown_command}

@@ -10,7 +10,8 @@ defmodule SymphonyElixir.GitHubProjectsTest do
     fixture = fixture()
     settings = settings()
     assert :ok = Adapter.validate_config(settings)
-    assert Adapter.agent_tool_specs() == []
+    assert Enum.map(Adapter.agent_tool_specs(), & &1["name"]) == ~w(project_context project_start project_report project_block project_prepare_pr project_handoff)
+    assert %{"success" => false} = Adapter.execute_agent_tool("project_start", %{}, [])
 
     assert {:ok, report} = Client.inspect(settings, request_fun: request_fun(fixture))
     assert report["execution_enabled"] == false

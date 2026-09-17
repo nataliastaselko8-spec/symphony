@@ -1294,6 +1294,17 @@ Scope-changing, invalid or missing configuration MUST stop admission; restoring 
 MUST NOT clear a restart requirement. The internal implementation and its disabled rollout
 boundary are documented in `elixir/docs/delivery_runtime.md`.
 
+Task publication MUST bind operations to the current worker permit and retained cycle.
+The controller MUST persist intent before remote writes, reserve CI before publication,
+and reconcile unknown results without blindly resending mutations. Git publication MUST
+use a verified immutable candidate in a fresh controller repository, with a fixed remote
+and the task's single non-protected ref; worker hooks, config and credentials MUST NOT
+enter this path. Cancellation MUST forbid new writes while retaining already-sent outcomes.
+PR binding before CI MUST NOT imply readiness. Handoff requires verified current CI,
+native issue/PR association and readback of the Project status. With Actions read-only,
+operator reruns MUST be observed and charged to the retained budget; no rerun endpoint
+is exposed. See `elixir/docs/github_projects_publication.md` for the staged implementation.
+
 When an implementation supports GitHub App authentication, bound sessions MUST retain an
 immutable App/installation and repository/Project scope while resolving current credentials
 for each request. Installation tokens MUST be treated as opaque strings, scoped explicitly,

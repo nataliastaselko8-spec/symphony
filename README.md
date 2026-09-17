@@ -15,7 +15,9 @@ It supports [controller-owned GitHub App credentials](elixir/docs/github_app_cre
 with automatic token renewal, and [delivery observations](elixir/docs/github_projects_delivery.md)
 that verify PRs, development runs and deployment evidence. An internal
 [delivery runtime](elixir/docs/delivery_runtime.md) connects retained ownership and budgets
-to worker admission, cancellation and cleanup. Projects-based agent execution is not enabled yet.
+to worker admission, cancellation and cleanup. Its [task publisher](elixir/docs/github_projects_publication.md)
+retains publication intent, confines Git writes to the task branch and waits for verified CI.
+Projects-based agent execution is not enabled yet.
 
 ## Running Symphony
 

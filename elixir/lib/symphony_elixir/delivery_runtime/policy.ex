@@ -35,10 +35,11 @@ defmodule SymphonyElixir.DeliveryRuntime.Policy do
       if(cycle["budget"]["fixes"] > 0, do: ["pr_ci_failure"], else: [])
   end
 
-  defp check_base(%{"recovery" => recovery} = cycle, _, observation) when not is_nil(recovery),
+  @spec check_base(map() | nil, map(), map()) :: :ok | {:error, atom()}
+  def check_base(%{"recovery" => recovery} = cycle, _, observation) when not is_nil(recovery),
     do: recovery_base(cycle, observation)
 
-  defp check_base(_, state, observation), do: validated_base(state, observation)
+  def check_base(_, state, observation), do: validated_base(state, observation)
 
   defp eligible?(settings, row, issue) do
     is_map(row) and row["eligible"] == true and row["issue_state"] == "OPEN" and row["archived"] == false and
@@ -75,6 +76,10 @@ defmodule SymphonyElixir.DeliveryRuntime.Policy do
   end
 
   def new_command?(%{action: "deployment", args: args}, state), do: state["cycle"]["deployment"] != args
+
+  def new_command?(%{action: "external_ci", args: args}, state),
+    do: get_in(state, ["cycle", "budget", "external_ci", "#{args["run_id"]}:#{args["run_attempt"]}"]) != args
+
   def new_command?(_, _), do: true
 
   @spec cleanup(map(), String.t()) :: :ok | {:error, atom()}

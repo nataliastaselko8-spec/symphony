@@ -42,6 +42,10 @@ for the future controller. It persists ownership, budgets, cancellation and reco
 using Python 3 from the standard system installation. It does not enable Projects execution or
 change the existing trackers' in-memory scheduling and cleanup behavior.
 
+[Task publication](docs/github_projects_publication.md) adds session-bound Projects tools,
+a durable outbox and a controller-only Git bundle publisher. The worker exporter, external
+stop verification and operator UI remain rollout prerequisites; this is not a live startup profile.
+
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).
 2. Get a new personal token in Linear via Settings → Security & access → Personal API keys, and

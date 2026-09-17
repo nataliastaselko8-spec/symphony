@@ -2,6 +2,7 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
   use ExUnit.Case, async: true
   @moduletag skip: :os.type() != {:unix, :linux}
   alias SymphonyElixir.{Config, DeliveryGate, DeliveryRuntime}
+  alias SymphonyElixir.DeliveryGate.{Budget, Effects}
   alias SymphonyElixir.DeliveryGateSupport, as: G
   alias SymphonyElixir.DeliveryObserverSupport, as: F
   alias SymphonyElixir.GitHubProjects.Delivery.Observation
@@ -79,11 +80,11 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
     ready(runtime)
   end
 
-  defp start_worker(runtime, host \\ nil) do
+  defp start_worker(runtime, host \\ nil, letter \\ "A") do
     parent = self()
 
     {:ok, pid} =
-      DeliveryRuntime.dispatch(runtime, issue(), host, fn handle ->
+      DeliveryRuntime.dispatch(runtime, issue(letter), host, fn handle ->
         send(parent, {:started, self(), handle})
         worker_loop(parent, handle)
       end)
@@ -104,7 +105,378 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
       :check ->
         send(parent, {:checked, DeliveryRuntime.check(handle)})
         worker_loop(parent, handle)
+
+      {:tool, name, args} ->
+        send(parent, {:tool_result, DeliveryRuntime.tool(handle, name, args)})
+        worker_loop(parent, handle)
+
+      :bound_tool ->
+        binding = %{adapter: SymphonyElixir.GitHubProjects.Adapter, tracker_settings: %{}, delivery: handle}
+        send(parent, {:bound_result, SymphonyElixir.Tracker.execute_bound_agent_tool(binding, "project_context", %{}, delivery: %{})})
+        worker_loop(parent, handle)
     end
+  end
+
+  defp task_tool(pid, name, args \\ %{}) do
+    send(pid, {:tool, name, args})
+    assert_receive {:tool_result, result}, 2_000
+    result
+  end
+
+  defp effect_runner(_settings, cycle, effect, authorize, _) do
+    step = Effects.next(effect) || "finalize"
+
+    result =
+      case step do
+        "push" -> %{"sha" => effect["payload"]["sha"], "digest" => String.duplicate("d", 64), "base_sha" => G.sha()}
+        "pull" -> %{"sha" => effect["payload"]["sha"], "pr_number" => 7, "pr_id" => "pr-node"}
+        "finalize" -> %{"sha" => effect["payload"]["sha"], "pr_number" => 7, "pr_id" => "pr-node"}
+        "status" -> %{"status" => "Agent working"}
+        "link" -> %{"pr_id" => "pr-node", "linked" => true}
+        "comment" -> %{"comment_id" => "comment"}
+      end
+
+    assert_stopped(step, cycle)
+    with :ok <- if(step == "finalize", do: :ok, else: authorize.(step, result)), do: {:ok, step, result}
+  end
+
+  defp assert_stopped("push", cycle), do: assert(cycle["budget"]["interval"] == nil)
+  defp assert_stopped(_, _), do: :ok
+
+  defp publication_runtime(c, ci) do
+    opts = [observer: ci_observer(c.settings, ci), publication_step: &effect_runner/5, stop_verifier: &stopped/1]
+    boot(c, opts)
+  end
+
+  defp stopped(_), do: :stopped
+
+  defp ci_observer(settings, ci_state) do
+    fn _, opts ->
+      context = opts[:context]
+      cycle = context.state["cycle"]
+      latest = if cycle, do: Budget.latest_ci(cycle["budget"])
+      remote = Agent.get(ci_state, & &1)
+
+      fact =
+        if latest && cycle["work"]["pr_number"],
+          do: %{
+            "origin" => if(latest["run_attempt"] in [nil, remote.attempt], do: "reserved", else: "external"),
+            "reservation_id" => latest["reservation_id"],
+            "run_id" => 100,
+            "run_attempt" => remote.attempt,
+            "sha" => latest["sha"],
+            "result" => remote.result,
+            "failure_kind" => remote.kind
+          }
+
+      facts = Map.put(facts(), "ci", fact)
+      reasons = if fact && fact["result"] != "success", do: ["pr_ci_" <> fact["result"]], else: ["manual_dev_validation_required"]
+      {:ok, Observation.new(settings, context, facts, reasons)}
+    end
+  end
+
+  test "task tools hand off through a stopped worker and retained CI reservation", c do
+    ci = start_supervised!({Agent, fn -> %{result: "success", attempt: 1, kind: "unknown"} end}, id: :remote_ci)
+
+    runtime =
+      boot(c,
+        observer: ci_observer(c.settings, ci),
+        publication_step: &effect_runner/5,
+        stop_verifier: &stopped/1,
+        watch_transition: fn _, _, _, row, _ ->
+          row = row |> Map.put("state", "Agent working") |> Map.put("large_field", String.duplicate("x", 8_000))
+          {:ok, %{"watch_digest" => String.duplicate("b", 64), "row" => row}}
+        end
+      )
+
+    reserve(runtime)
+    {pid, handle} = start_worker(runtime)
+    assert {:error, :worker_permit_revoked} = DeliveryRuntime.tool(handle, "project_start", %{})
+    assert {:ok, %{"phase" => "working"}} = task_tool(pid, "project_context")
+    send(pid, :bound_tool)
+    assert_receive {:bound_result, %{"success" => true}}, 2_000
+    assert {:error, :invalid_task_tool_arguments} = task_tool(pid, "merge")
+    assert {:ok, _} = task_tool(pid, "project_start")
+    await(runtime, fn s -> :sys.get_state(runtime).effect == nil and Enum.any?(s.gate.state["cycle"]["effects"], fn {_, e} -> e["steps"]["status"] != nil end) end)
+    assert :sys.get_state(runtime).worker.watch_digest == String.duplicate("b", 64)
+    assert {:ok, _} = task_tool(pid, "project_report", %{"body" => "Progress"})
+    await(runtime, fn s -> Enum.any?(s.gate.state["cycle"]["effects"], fn {_, e} -> get_in(e, ["steps", "comment", "status"]) == "confirmed" end) end)
+    assert {:ok, %{"operation_id" => op}} = task_tool(pid, "project_prepare_pr", %{"title" => "Feature", "body" => "Tested", "sha" => G.sha("b")})
+    assert {:ok, %{"status" => "submitted"}} = task_tool(pid, "project_handoff", %{"operation_id" => op})
+    done = await(runtime, &(&1.gate.state["cycle"]["phase"] == "awaiting_review"), 500)
+    assert done.worker == nil
+    assert done.gate.state["cycle"]["work"]["pr_number"] == 7
+    assert map_size(done.gate.state["cycle"]["budget"]["ci"]) == 1
+    refute Process.alive?(pid)
+    assert {:error, _} = DeliveryRuntime.dispatch(runtime, issue("B"), nil, fn _ -> :ok end)
+  end
+
+  test "owner rerun is observed on the same commit without Actions write", c do
+    ci = start_supervised!({Agent, fn -> %{result: "failure", attempt: 1, kind: "unknown"} end}, id: :remote_ci)
+    runtime = publication_runtime(c, ci)
+    reserve(runtime)
+    {pid, _} = start_worker(runtime)
+    {:ok, %{"operation_id" => op}} = task_tool(pid, "project_prepare_pr", %{"title" => "Feature", "body" => "Tested", "sha" => G.sha("b")})
+    assert {:ok, _} = task_tool(pid, "project_handoff", %{"operation_id" => op})
+    await(runtime, &(&1.reason == :awaiting_ci_or_manual_rerun), 500)
+    Agent.update(ci, &%{&1 | result: "success", attempt: 2})
+    DeliveryRuntime.refresh(runtime)
+    done = await(runtime, &(&1.gate.state["cycle"]["phase"] == "awaiting_review"), 500)
+    assert map_size(done.gate.state["cycle"]["budget"]["ci"]) == 2
+    assert done.gate.state["cycle"]["budget"]["fixes"] == 0
+  end
+
+  test "confirmed verification failure releases only the same task into fix budget", c do
+    ci = start_supervised!({Agent, fn -> %{result: "failure", attempt: 1, kind: "verification"} end}, id: :remote_ci)
+    runtime = publication_runtime(c, ci)
+    reserve(runtime)
+    {pid, _} = start_worker(runtime)
+    {:ok, %{"operation_id" => op}} = task_tool(pid, "project_prepare_pr", %{"title" => "Feature", "body" => "Tested", "sha" => G.sha("b")})
+    task_tool(pid, "project_handoff", %{"operation_id" => op})
+    fixed = await(runtime, &(&1.gate.state["cycle"]["phase"] == "reserved" and &1.gate.state["cycle"]["budget"]["fixes"] == 1), 500)
+    assert fixed.gate.state["cycle"]["work"]["pr_number"] == 7
+    ready(runtime)
+    {worker, _} = start_worker(runtime)
+    assert DeliveryRuntime.status(runtime).gate.state["cycle"]["budget"]["interval"]["budget"] == "fix_ms"
+    {:ok, %{"operation_id" => repeated}} = task_tool(worker, "project_prepare_pr", %{"title" => "Retry", "body" => "Unchanged", "sha" => G.sha("b")})
+    task_tool(worker, "project_handoff", %{"operation_id" => repeated})
+    await(runtime, &(&1.reason == :publication_budget_required))
+    DeliveryRuntime.pause(runtime, "operator_pause")
+    DeliveryRuntime.refresh(runtime)
+    await(runtime, &(&1.observation != nil))
+    send(runtime, :pump_effect)
+    assert DeliveryRuntime.status(runtime).gate.state["cycle"]["phase"] == "needs_human_decision"
+  end
+
+  test "cancellation during a remote write records its result but never advances publication", c do
+    parent = self()
+
+    runner = fn _, _, effect, authorize, _ ->
+      :ok = authorize.("comment", %{})
+      send(parent, {:remote_sent, self(), effect["operation_id"]})
+
+      receive do
+        :complete -> {:ok, "comment", %{"comment_id" => "comment"}}
+      end
+    end
+
+    runtime = boot(c, publication_step: runner, stop_verifier: &stopped/1)
+    reserve(runtime)
+    {pid, _} = start_worker(runtime)
+    task_tool(pid, "project_report", %{"body" => "Progress"})
+    assert_receive {:remote_sent, writer, op}, 2_000
+    version = DeliveryRuntime.status(runtime).gate.version
+    assert {:ok, _} = DeliveryRuntime.command(runtime, version, "cancel-write", "request_cancel", G.operator())
+    send(writer, :complete)
+    cancelled = await(runtime, &(get_in(&1.gate.state, ["cycle", "effects", op, "steps", "comment", "status"]) == "confirmed"))
+    assert cancelled.gate.state["cycle"]["phase"] == "cancelling"
+    assert {:error, _} = DeliveryRuntime.dispatch(runtime, issue("B"), nil, fn _ -> :ok end)
+  end
+
+  test "a blocking report stops the task and retains ownership", c do
+    runtime = boot(c, publication_step: &effect_runner/5, stop_verifier: &stopped/1)
+    reserve(runtime)
+    {pid, _} = start_worker(runtime)
+    assert {:ok, _} = task_tool(pid, "project_block", %{"body" => "Need a decision"})
+    state = await(runtime, &(&1.gate.state["cycle"]["block_reason"] == "agent_requested_human_decision"))
+    assert state.worker == nil
+    assert state.gate.state["cycle"]["phase"] == "needs_human_decision"
+  end
+
+  test "publisher death and rate limits retain intent and enforce read backoff", c do
+    behavior = start_supervised!({Agent, fn -> :die end}, id: :publisher_behavior)
+
+    runner = fn _, _, _, _, _ ->
+      case Agent.get(behavior, & &1) do
+        :die -> exit(:shutdown)
+        :limited -> {:error, {:publication_limited, 90}}
+        :error -> {:error, :disconnected}
+      end
+    end
+
+    runtime = boot(c, publication_step: runner, freshness_ms: 1_000_000)
+    reserve(runtime)
+    {pid, handle} = start_worker(runtime)
+    task_tool(pid, "project_report", %{"body" => "Progress"})
+    await(runtime, &(&1.reason == :publication_result_unknown))
+    assert :sys.get_state(runtime).effect_retry_at == 30_000
+    Agent.update(behavior, fn _ -> :limited end)
+    Agent.update(c.clock, fn _ -> 30_000 end)
+    send(runtime, :pump_effect)
+    await(runtime, fn _ -> :sys.get_state(runtime).effect_retry_at == 120_000 end)
+    Agent.update(behavior, fn _ -> :error end)
+    Agent.update(c.clock, fn _ -> 120_000 end)
+    send(runtime, :pump_effect)
+    await(runtime, fn _ -> :sys.get_state(runtime).effect_retry_at == 150_000 end)
+    assert {:error, :worker_permit_revoked} = GenServer.call(runtime, {:tool, handle, "project_report", %{}})
+    assert {:error, :effect_revoked} = GenServer.call(runtime, {:effect_send, "spoof", "comment", %{}})
+    send(pid, :finish)
+  end
+
+  test "late publication authorization after cancellation is rejected", c do
+    parent = self()
+
+    runner = fn _, _, _, authorize, _ ->
+      send(parent, {:ready_to_send, self()})
+
+      receive do
+        :continue -> send(parent, {:late_authorization, authorize.("comment", %{})})
+      end
+
+      {:error, :revoked}
+    end
+
+    runtime = boot(c, publication_step: runner, stop_verifier: &stopped/1)
+    reserve(runtime)
+    {pid, _} = start_worker(runtime)
+    task_tool(pid, "project_report", %{"body" => "Progress"})
+    assert_receive {:ready_to_send, publisher}, 2_000
+    send(runtime, :pump_effect)
+    version = DeliveryRuntime.status(runtime).gate.version
+    DeliveryRuntime.command(runtime, version, "cancel-before-send", "request_cancel", G.operator())
+    send(publisher, :continue)
+    assert_receive {:late_authorization, {:error, :effect_revoked}}, 2_000
+    state = await(runtime, &(&1.reason == :publication_result_unknown))
+    assert Enum.all?(state.gate.state["cycle"]["effects"], fn {_, effect} -> effect["steps"] == %{} end)
+  end
+
+  test "a foreign operation response cannot settle the real outbox", c do
+    parent = self()
+
+    runner = fn _, _, _, authorize, _ ->
+      send(parent, {:bad_authorization, authorize.("unknown", %{})})
+      {:ok, "unknown", %{}}
+    end
+
+    runtime = boot(c, publication_step: runner)
+    reserve(runtime)
+    {pid, _} = start_worker(runtime)
+    task_tool(pid, "project_report", %{"body" => "Progress"})
+    assert_receive {:bad_authorization, {:error, :effect_send_not_allowed}}, 2_000
+    await(runtime, &(&1.reason == :publication_reconciliation_required))
+    send(pid, :finish)
+  end
+
+  test "an already observed report can complete without another mutation", c do
+    runtime = boot(c, publication_step: fn _, _, _, _, _ -> {:ok, "comment", %{"comment_id" => "existing"}} end)
+    reserve(runtime)
+    {pid, _} = start_worker(runtime)
+    {:ok, %{"operation_id" => id}} = task_tool(pid, "project_report", %{"body" => "Progress"})
+    await(runtime, &(get_in(&1.gate.state, ["cycle", "effects", id, "steps", "comment", "status"]) == "confirmed"))
+    send(pid, :finish)
+  end
+
+  test "a running watch is cancelled before the controller changes Status", c do
+    parent = self()
+
+    watch = fn _, _, _, _ ->
+      send(parent, {:watch_blocked, self()})
+
+      receive do
+        :never -> :ok
+      end
+    end
+
+    transition = fn _, _, _, _, _ -> {:ok, %{}} end
+    writer = &effect_runner/5
+    runtime = boot(c, watch: watch, publication_step: writer, stop_verifier: &stopped/1, watch_transition: transition)
+    reserve(runtime)
+    {pid, _} = start_worker(runtime)
+    DeliveryRuntime.refresh(runtime)
+    assert_receive {:watch_blocked, watcher}, 2_000
+    task_tool(pid, "project_start")
+    await(runtime, &(&1.worker == nil))
+    refute Process.alive?(watcher)
+    refute Process.alive?(pid)
+  end
+
+  test "changed deployment attempt blocks publication on the same dev commit", c do
+    proof = start_supervised!({Agent, fn -> 1 end}, id: :deployment_attempt)
+
+    observer = fn _, opts ->
+      deployment = G.deployment("a", Agent.get(proof, & &1))
+      {:ok, Observation.new(c.settings, opts[:context], Map.put(facts(), "deployment", deployment), [])}
+    end
+
+    runtime = boot(c, observer: observer, publication_step: &effect_runner/5, stop_verifier: &stopped/1)
+    reserve(runtime)
+    {pid, _} = start_worker(runtime)
+    {:ok, %{"operation_id" => op}} = task_tool(pid, "project_prepare_pr", %{"title" => "Feature", "body" => "Ready", "sha" => G.sha("b")})
+    Agent.update(proof, fn _ -> 2 end)
+    task_tool(pid, "project_handoff", %{"operation_id" => op})
+    state = await(runtime, &(&1.reason == :publication_observation_required))
+    assert state.gate.state["cycle"]["budget"]["ci"] == %{}
+    refute Effects.sent?(state.gate.state["cycle"])
+  end
+
+  test "cancellation while final readback runs cannot become handoff", c do
+    parent = self()
+
+    runner = fn settings, cycle, effect, authorize, opts ->
+      if Effects.next(effect) == nil do
+        send(parent, {:final_readback, self()})
+
+        receive do
+          :continue -> effect_runner(settings, cycle, effect, authorize, opts)
+        end
+      else
+        effect_runner(settings, cycle, effect, authorize, opts)
+      end
+    end
+
+    ci = start_supervised!({Agent, fn -> %{result: "success", attempt: 1, kind: "unknown"} end}, id: :remote_ci)
+    opts = [observer: ci_observer(c.settings, ci), publication_step: runner, stop_verifier: &stopped/1]
+    runtime = boot(c, opts)
+    reserve(runtime)
+    {pid, _} = start_worker(runtime)
+    {:ok, %{"operation_id" => op}} = task_tool(pid, "project_prepare_pr", %{"title" => "Feature", "body" => "Ready", "sha" => G.sha("b")})
+    task_tool(pid, "project_handoff", %{"operation_id" => op})
+    assert_receive {:final_readback, writer}, 3_000
+    version = DeliveryRuntime.status(runtime).gate.version
+    DeliveryRuntime.command(runtime, version, "cancel-final", "request_cancel", G.operator())
+    send(writer, :continue)
+    state = await(runtime, &(&1.observation != nil))
+    assert state.gate.state["cycle"]["phase"] == "cancelling"
+  end
+
+  test "tool returns a bounded error when the controller disconnects after permit check" do
+    runtime =
+      spawn(fn ->
+        receive do
+          {:"$gen_call", from, {:check, _, _}} -> GenServer.reply(from, :ok)
+        end
+
+        receive do
+          {:"$gen_call", _, {:tool, _, _, _}} -> :ok
+        end
+      end)
+
+    gate =
+      spawn(fn ->
+        receive do
+          {:"$gen_call", from, {:worker_check, _, _}} -> GenServer.reply(from, :ok)
+        end
+      end)
+
+    assert {:error, :delivery_runtime_unavailable} = DeliveryRuntime.tool(%{runtime: runtime, gate: gate, nonce: make_ref()}, "project_context", %{})
+  end
+
+  test "recovery publisher can reserve against its approved broken-dev base", c do
+    runtime = boot(c, publication_step: fn _, _, _, _, _ -> {:error, :no_transport} end, stop_verifier: &stopped/1)
+    reserve(runtime)
+    DeliveryRuntime.pause(runtime, "needs_recovery")
+    DeliveryRuntime.refresh(runtime)
+    ready(runtime)
+    recovery = Map.merge(G.recovery(), %{"item_id" => "item-B", "issue_id" => "issue-B", "sha" => G.sha()})
+    version = DeliveryRuntime.status(runtime).gate.version
+    assert {:ok, _} = DeliveryRuntime.command(runtime, version, "recovery", "assign_recovery", recovery)
+    ready(runtime)
+    {pid, _} = start_worker(runtime, nil, "B")
+    {:ok, %{"operation_id" => op}} = task_tool(pid, "project_prepare_pr", %{"title" => "Recovery", "body" => "Fix", "sha" => G.sha("b")})
+    task_tool(pid, "project_handoff", %{"operation_id" => op})
+    state = await(runtime, &(&1.reason == :publication_result_unknown))
+    assert state.gate.state["cycle"]["recovery"] != nil
+    assert map_size(state.gate.state["cycle"]["budget"]["ci"]) == 1
   end
 
   test "one owner retains work and budget through normal continuation", c do
@@ -180,6 +552,7 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
     assert {:error, :restart_required} = DeliveryRuntime.check_settings(runtime, changed)
     state = await(runtime, &(&1.worker == nil))
     assert state.restart_required
+    send(runtime, :pump_effect)
     assert state.gate.state["cycle"]["task"]["item_id"] == "item-A"
     assert {:error, :restart_required} = DeliveryRuntime.dispatch(runtime, issue(), nil, fn _ -> :ok end)
   end

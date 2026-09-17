@@ -5,9 +5,11 @@ defmodule SymphonyElixir.DeliveryRuntime do
   require Logger
 
   alias SymphonyElixir.{Config, DeliveryGate}
+  alias SymphonyElixir.DeliveryGate.{Budget, Effects}
   alias SymphonyElixir.DeliveryRuntime.{HookContext, Policy}
   alias SymphonyElixir.GitHubProjects.Delivery
   alias SymphonyElixir.GitHubProjects.Delivery.Observation
+  alias SymphonyElixir.GitHubProjects.Publication
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
@@ -32,6 +34,13 @@ defmodule SymphonyElixir.DeliveryRuntime do
 
   @spec pause(GenServer.server(), String.t()) :: :ok
   def pause(server, reason), do: GenServer.call(server, {:pause, reason}, 15_000)
+
+  @spec tool(map(), String.t(), map()) :: {:ok, map()} | {:error, atom()}
+  def tool(handle, name, args) do
+    with :ok <- check(handle, :effect), do: GenServer.call(handle.runtime, {:tool, handle, name, args}, 30_000)
+  catch
+    :exit, _ -> {:error, :delivery_runtime_unavailable}
+  end
 
   @doc "Trusted controller only; operator authentication belongs to PR-10."
   @spec command(GenServer.server(), map(), String.t(), String.t(), map()) :: term()
@@ -62,6 +71,8 @@ defmodule SymphonyElixir.DeliveryRuntime do
         observation: nil,
         observed_at: nil,
         worker: nil,
+        effect: nil,
+        effect_retry_at: now.(),
         read: nil,
         next_read_at: now.(),
         retry_at: now.(),
@@ -117,6 +128,35 @@ defmodule SymphonyElixir.DeliveryRuntime do
     end
   end
 
+  def handle_call({:tool, handle, name, args}, {pid, _}, %{worker: %{pid: pid, handle: handle, status: :running}} = state) do
+    context = DeliveryGate.status(state.gate)
+
+    case tool_command(state, context, name, args) do
+      {:ok, result, next} -> {:reply, {:ok, result}, next}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:tool, _, _, _}, _, state), do: {:reply, {:error, :worker_permit_revoked}, state}
+
+  def handle_call({:effect_send, id, step, proof}, {pid, _}, %{effect: %{task: %{pid: pid}, id: id}} = state) do
+    cycle = DeliveryGate.status(state.gate).state["cycle"]
+
+    result =
+      with true <- cycle["cancellation"] == nil and not state.restart and effect_current?(state),
+           :ok <- candidate_proof(state, id, step, proof),
+           {:ok, _} <- execute(state, "effect_sent", %{"operation_id" => id, "step" => step}),
+           do: :ok,
+           else: (
+             false -> {:error, :effect_revoked}
+             error -> error
+           )
+
+    {:reply, result, state}
+  end
+
+  def handle_call({:effect_send, _, _, _}, _, state), do: {:reply, {:error, :effect_revoked}, state}
+
   def handle_call({:pause, reason}, _from, state) do
     state = block(state, reason)
     {:reply, :ok, stop_worker(state, reason)}
@@ -165,7 +205,19 @@ defmodule SymphonyElixir.DeliveryRuntime do
   def handle_info(:tick, state) do
     schedule_tick(state.opts)
     state = state |> check_deadline() |> account()
-    {:noreply, maybe_read(state)}
+    {:noreply, state |> maybe_read() |> pump_effect()}
+  end
+
+  def handle_info(:pump_effect, state), do: {:noreply, pump_effect(state)}
+  def handle_info({:publication_stop, interval}, %{worker: %{interval: interval}} = state), do: {:noreply, stop_worker(state, :publication_requested)}
+
+  def handle_info({ref, result}, %{effect: %{task: %{ref: ref}} = effect} = state) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, finish_effect(state, effect, result)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _, _}, %{effect: %{task: %{ref: ref}}} = state) do
+    {:noreply, %{state | effect: nil, reason: :publication_result_unknown, effect_retry_at: state.now.() + 30_000}}
   end
 
   def handle_info({ref, result}, %{read: %{task: %{ref: ref}} = read} = state) do
@@ -194,13 +246,14 @@ defmodule SymphonyElixir.DeliveryRuntime do
   @impl true
   def terminate(_reason, state) do
     if state.worker, do: Task.Supervisor.terminate_child(state.tasks, state.worker.pid)
+    if state.effect, do: Task.Supervisor.terminate_child(state.tasks, state.effect.task.pid)
     :ok
   end
 
   defp ready(state, context) do
     cond do
       state.restart -> {:error, :restart_required}
-      state.worker != nil -> {:error, :worker_not_stopped}
+      state.worker != nil or state.effect != nil -> {:error, :worker_not_stopped}
       state.observation == nil or age(state) >= freshness(state) -> {:error, :observation_required}
       true -> Observation.validate(state.observation, state.settings, context)
     end
@@ -269,6 +322,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
           deadline: now + receipt.remaining_ms,
           status: :running,
           effects: false,
+          row: Enum.find(state.observation.facts["project"]["items"], &(&1["item_id"] == issue.id)),
           watch_digest: state.observation.facts["watch_digest"]
         }
 
@@ -308,6 +362,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
   end
 
   defp start_read(%{read: read} = state) when not is_nil(read), do: state
+  defp start_read(%{effect: effect} = state) when not is_nil(effect), do: state
   defp start_read(%{restart: true} = state), do: state
   defp start_read(%{worker: %{status: status}} = state) when status != :running, do: state
 
@@ -349,7 +404,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
          :ok <- Observation.validate(observation, state.settings, context),
          {:ok, commands} <- Observation.commands(observation, state.settings, context) do
       state = %{state | observation: observation, observed_at: started, reason: observation.reasons}
-      apply_observation(state, context, commands)
+      state |> apply_observation(context, commands) |> pump_effect()
     else
       _ ->
         delay = max(observation.retry_after_seconds || 0, 30) * 1_000
@@ -368,7 +423,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
     sha = state.observation.facts["dev_sha"]
     result = DeliveryGate.reconcile(state.gate, context.version, state.settings.gate.scope, sha)
 
-    if command && (result == :ok or command.action == "observe_ci") do
+    if command && (result == :ok or command.action in ~w(observe_ci external_ci manual_ci)) do
       case DeliveryGate.execute(state.gate, context.version, id(), command.action, command.args) do
         {:ok, _} -> invalidate(state)
         _ -> %{state | reason: :transition_rejected}
@@ -419,7 +474,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
       elapsed = max(worker.elapsed_ms, state.now.() - worker.started_at)
       result = execute(state, "stop_work", %{"interval_id" => worker.interval, "elapsed_ms" => elapsed})
       state = %{state | worker: nil}
-      state = if reason != :normal, do: block(state, "worker_stopped_requires_reconciliation"), else: state
+      state = if reason != :normal and state.reason != :publication_requested, do: block(state, "worker_stopped_requires_reconciliation"), else: state
       if match?({:ok, _}, result), do: invalidate(state), else: %{state | reason: :stop_accounting_unconfirmed}
     else
       state = block(state, "stop_unconfirmed")
@@ -452,6 +507,252 @@ defmodule SymphonyElixir.DeliveryRuntime do
   defp worker_context(worker) do
     identifier = "GHP-" <> Base.encode16(worker.item, case: :lower)
     "issue_id=#{worker.item} issue_identifier=#{identifier} interval_id=#{worker.interval}"
+  end
+
+  defp tool_command(state, context, "project_context", args) when args == %{},
+    do: {:ok, Map.take(context.state["cycle"], ~w(id phase task work budget block_reason)), state}
+
+  defp tool_command(state, _context, "project_handoff", %{"operation_id" => id} = args) when map_size(args) == 1 do
+    with {:ok, _} <- execute(state, "effect_submit", %{"operation_id" => id}) do
+      Process.send_after(self(), {:publication_stop, state.worker.interval}, 50)
+      {:ok, %{"operation_id" => id, "status" => "submitted"}, state}
+    end
+  end
+
+  defp tool_command(state, _context, name, payload) do
+    kind = %{"project_start" => "start", "project_report" => "report", "project_block" => "block", "project_prepare_pr" => "publish"}[name]
+
+    if Effects.payload?(kind, payload) do
+      id = :crypto.hash(:sha256, :erlang.term_to_binary({state.worker.interval, kind, payload}, [:deterministic])) |> Base.encode16(case: :lower)
+      args = %{"operation_id" => id, "kind" => kind, "payload" => payload}
+
+      with {:ok, _} <- execute(state, "effect_request", args) do
+        schedule_block_stop(kind, state.worker.interval)
+        send(self(), :pump_effect)
+        {:ok, %{"operation_id" => id, "status" => if(kind == "publish", do: "prepared", else: "queued")}, state}
+      end
+    else
+      {:error, :invalid_task_tool_arguments}
+    end
+  end
+
+  defp schedule_block_stop("block", interval), do: Process.send_after(self(), {:publication_stop, interval}, 50)
+  defp schedule_block_stop(_, _), do: :ok
+
+  defp candidate_proof(state, id, "push", proof) do
+    args = proof |> Map.take(~w(digest base_sha)) |> Map.put("operation_id", id)
+    with {:ok, _} <- execute(state, "effect_candidate", args), do: :ok
+  end
+
+  defp candidate_proof(_, _, _, _), do: :ok
+
+  defp pump_effect(%{effect: effect} = state) when not is_nil(effect), do: state
+  defp pump_effect(%{restart: true} = state), do: state
+
+  defp pump_effect(state) do
+    context = DeliveryGate.status(state.gate)
+    cycle = context.state && context.state["cycle"]
+
+    effect = next_effect(cycle)
+
+    cond do
+      effect == nil -> state
+      effect_paused?(state, context, effect) -> state
+      sent_effect?(effect) -> launch_effect(state, cycle, effect)
+      effect["kind"] == "publish" -> pump_publication(state, context, cycle, effect)
+      true -> launch_effect(state, cycle, effect)
+    end
+  end
+
+  defp effect_paused?(state, context, effect) do
+    context.mode not in [:reconciled, :needs_reconciliation] or state.now.() < state.effect_retry_at or
+      worker_blocks_effect?(state.worker, effect) or (is_nil(state.worker) and state.observation == nil)
+  end
+
+  defp next_effect(nil), do: nil
+
+  defp next_effect(cycle) do
+    cycle |> Map.get("effects", %{}) |> Map.values() |> Enum.find(&select_effect?(&1, cycle))
+  end
+
+  defp select_effect?(effect, cycle) do
+    active = not effect["cancelled"] and cycle["cancellation"] == nil and effect["submitted"]
+    finishing = effect["kind"] == "publish" and cycle["phase"] == "awaiting_ci"
+    sent_effect?(effect) or (active and (Effects.pending?(effect) or finishing))
+  end
+
+  defp sent_effect?(effect), do: get_in(effect, ["steps", Effects.next(effect), "status"]) == "sent"
+  defp worker_blocks_effect?(nil, _), do: false
+  defp worker_blocks_effect?(worker, effect), do: worker.status != :running or effect["kind"] in ~w(publish block)
+
+  defp pump_publication(state, context, cycle, effect) do
+    ci = Budget.latest_ci(cycle["budget"])
+
+    if publication_base?(state, context, effect),
+      do: advance_publication(state, cycle, effect, ci),
+      else: %{state | reason: :publication_observation_required}
+  end
+
+  defp advance_publication(state, cycle, effect, ci) do
+    cond do
+      cycle["phase"] == "reserved" ->
+        request = %{"reservation_id" => effect["operation_id"], "sha" => effect["payload"]["sha"], "retry" => false, "reason" => "Controller publication"}
+
+        case execute(state, "reserve_ci", request) do
+          {:ok, _} -> invalidate(state)
+          _ -> %{state | reason: :publication_budget_required}
+        end
+
+      cycle["phase"] != "awaiting_ci" or not matching_ci?(ci, effect) ->
+        state
+
+      Effects.next(effect) in ~w(push pull) ->
+        launch_effect(state, cycle, effect)
+
+      ci["result"] == "success" ->
+        launch_effect(state, cycle, effect)
+
+      true ->
+        %{state | reason: :awaiting_ci_or_manual_rerun}
+    end
+  end
+
+  defp matching_ci?(ci, effect), do: ci["sha"] == effect["payload"]["sha"]
+
+  defp publication_base?(state, context, effect) do
+    observation = state.observation
+
+    if current_observation?(state, context) do
+      cycle = context.state["cycle"]
+      base = if cycle["recovery"], do: cycle["work"]["base_sha"], else: context.state["baseline"]["sha"]
+      permitted = ~w(manual_dev_validation_required task_pr_not_bound awaiting_review_or_merge pr_ci_missing pr_ci_pending pr_ci_failure)
+      permitted = allow_effect_reason(permitted, effect, "pull", "sent", "pr_association_requires_operator")
+      permitted = if get_in(effect, ["steps", "push", "status"]) == "confirmed", do: ["pr_head_changed" | permitted], else: permitted
+
+      permitted =
+        if cycle["recovery"],
+          do: permitted ++ ~w(recovery_owner_retained deployment_failure deployment_cancelled deployment_timed_out deployment_startup_failure resume_queue_before_dev_validation),
+          else: permitted
+
+      observation.facts["dev_sha"] == base and Policy.check_base(cycle, context.state, observation) == :ok and
+        Enum.all?(observation.reasons, &(&1 in permitted))
+    else
+      false
+    end
+  end
+
+  defp current_observation?(state, context) do
+    state.observation != nil and age(state) < freshness(state) and
+      Observation.validate(state.observation, state.settings, context) == :ok
+  end
+
+  defp allow_effect_reason(reasons, effect, step, status, reason),
+    do: if(get_in(effect, ["steps", step, "status"]) == status, do: [reason | reasons], else: reasons)
+
+  defp launch_effect(state, cycle, effect) do
+    state = cancel_read(state)
+    runtime = self()
+    options = Keyword.get(state.opts, :publication_options, [])
+    base = if state.worker, do: state.worker.handle.context["expected_dev_sha"], else: state.observation.facts["dev_sha"]
+    options = Keyword.put(options, :base_sha, base)
+    authorize = fn step, proof -> GenServer.call(runtime, {:effect_send, effect["operation_id"], step, proof}, 15_000) end
+    runner = Keyword.get(state.opts, :publication_step, &Publication.step/5)
+    context = DeliveryGate.status(state.gate)
+
+    task =
+      Task.Supervisor.async_nolink(state.tasks, fn ->
+        result = runner.(state.settings, cycle, effect, authorize, options)
+        refresh_status_result(state, context, effect, result)
+      end)
+
+    %{state | effect: %{task: task, id: effect["operation_id"], cycle: cycle["id"], version: context.version, started_at: state.now.()}}
+  end
+
+  defp refresh_status_result(%{worker: worker} = state, context, %{"kind" => "start"}, {:ok, "status", result}) when not is_nil(worker) do
+    watch = Keyword.get(state.opts, :watch_transition, &Delivery.watch_transition/5)
+
+    with {:ok, proof} <- watch.(state.config, context, worker.watch_digest, worker.row, Keyword.get(state.opts, :observer_options, [])),
+         do: {:ok, "status", Map.merge(result, proof)}
+  end
+
+  defp refresh_status_result(_, _, _, result), do: result
+
+  defp finish_effect(state, record, {:ok, "finalize", result}) do
+    context = DeliveryGate.status(state.gate)
+
+    with true <- context.version == record.version and context.state["cycle"]["cancellation"] == nil and effect_current?(state),
+         :ok <- DeliveryGate.reconcile(state.gate, context.version, state.settings.gate.scope, state.observation.facts["dev_sha"]),
+         {:ok, _} <- execute(state, "handoff", Map.take(result, ~w(pr_number sha))) do
+      invalidate(%{state | effect: nil})
+    else
+      _ -> invalidate(%{state | effect: nil, reason: :handoff_reconciliation_required})
+    end
+  end
+
+  defp finish_effect(state, record, {:ok, step, result}) do
+    context = DeliveryGate.status(state.gate)
+    cycle = context.state["cycle"]
+    effect = get_in(cycle, ["effects", record.id])
+    args = %{"operation_id" => record.id, "step" => step}
+    persisted_result = Map.drop(result, ~w(watch_digest row))
+    # An existing remote postcondition can complete a not-yet-sent intent without a write.
+    with true <- cycle["id"] == record.cycle and is_map(effect),
+         :ok <- record_observed_effect(state, effect, args),
+         {:ok, _} <- execute(state, "effect_confirm", Map.put(args, "result", persisted_result)),
+         :ok <- finish_effect_transition(state, effect, step, result) do
+      next = %{state | effect: nil}
+      next = if step == "status" and state.worker, do: refresh_worker_status(next, result, record.started_at), else: next
+      send(self(), :pump_effect)
+      if next.worker, do: next, else: invalidate(next)
+    else
+      _ -> %{state | effect: nil, reason: :publication_reconciliation_required, effect_retry_at: state.now.() + 30_000}
+    end
+  end
+
+  defp finish_effect(state, _, error) do
+    seconds =
+      case error do
+        {:error, {:publication_limited, n}} -> n
+        _ -> 30
+      end
+
+    %{state | effect: nil, reason: :publication_result_unknown, effect_retry_at: state.now.() + seconds * 1_000}
+  end
+
+  defp record_observed_effect(state, effect, args) do
+    if effect["steps"][args["step"]] do
+      :ok
+    else
+      with {:ok, _} <- execute(state, "effect_sent", args), do: :ok
+    end
+  end
+
+  defp finish_effect_transition(state, _, "pull", result) do
+    with {:ok, _} <- execute(state, "bind_pr", Map.take(result, ~w(pr_number sha))), do: :ok
+  end
+
+  defp finish_effect_transition(state, %{"kind" => "block"}, "status", _) do
+    with {:ok, _} <- execute(state, "block", %{"reason" => "agent_requested_human_decision"}), do: :ok
+  end
+
+  defp finish_effect_transition(_, _, _, _), do: :ok
+
+  defp refresh_worker_status(state, %{"watch_digest" => digest, "row" => row}, started),
+    do: %{state | worker: %{state.worker | watch_digest: digest, row: row, checked_at: started}}
+
+  defp refresh_worker_status(state, _, _), do: stop_worker(state, :project_status_requires_reconciliation)
+
+  defp effect_current?(%{worker: worker} = state) when not is_nil(worker),
+    do: worker.status == :running and state.now.() < worker.deadline and state.now.() - worker.checked_at < freshness(state)
+
+  defp effect_current?(state), do: state.observation != nil and age(state) < freshness(state)
+
+  defp cancel_read(%{read: nil} = state), do: state
+
+  defp cancel_read(state) do
+    Process.cancel_timer(state.read.timeout)
+    Task.shutdown(state.read.task, :brutal_kill)
+    %{state | read: nil}
   end
 
   defp age(%{observed_at: nil}), do: nil
