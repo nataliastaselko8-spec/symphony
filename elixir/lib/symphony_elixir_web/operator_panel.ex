@@ -42,8 +42,13 @@ defmodule SymphonyElixirWeb.OperatorPanel do
             <p>Повтор CI без изменения кода запускается вручную в GitHub: Re-run jobs.</p>
           </section>
           <section><h3>Среда и ручная проверка</h3><p><%= @model.readiness %></p><p><%= @model.validation %></p>
-            <p>Cloudflare Queue: <%= get_in(@model.deployment, ["queue", "state"]) || "Нет данных" %></p>
-            <p>Scheduler: <%= @model.deployment["scheduler"] || "Нет данных" %></p>
+            <p>Queue по отчёту деплоя: <%= get_in(@model.deployment, ["queue", "state"]) || "Нет данных" %></p>
+            <p>Scheduler по отчёту деплоя: <%= @model.deployment["scheduler"] || "Нет данных" %></p>
+            <div :if={@model.queue_confirmation != %{}}>
+              <p>Ручное подтверждение: <%= @model.queue_confirmation["actor"] %> · <%= DateTime.from_unix!(@model.queue_confirmation["confirmed_at_ms"], :millisecond) |> DateTime.to_iso8601() %>.</p>
+              <p>Queue: <%= @model.queue_confirmation["queue_resource"] %>; Scheduler: <%= @model.queue_confirmation["scheduler_resource"] %>.</p>
+              <p><%= if @model.queue_confirmation["validated"], do: "Принято вместе с ручной проверкой dev для этого деплоя.", else: "В течение 30 минут после подтверждения Queue сохраните ручную проверку dev; иначе проверьте Queue заново." %></p>
+            </div>
             <p>Последняя сверка: <%= @model.observed_at || "Ожидается" %></p>
             <p :if={@model.age_ms && @model.age_ms >= 60_000} class="operator-warning">Наблюдение старше минуты. Перед решением нужны свежие данные.</p>
           </section>
@@ -70,6 +75,14 @@ defmodule SymphonyElixirWeb.OperatorPanel do
           <p :if={@form.action == "cancel"}>Будет запрошена остановка. PR, ветка и deployment автоматически не удаляются и не откатываются.</p>
           <p :if={@form.action == "review_resume"}>Сначала верните карточку в Ready for agent на доске. Ветка и открытый PR сохранятся.</p>
           <p :if={@form.action == "problem"}>Очередь останется закрытой. Recovery назначается отдельно.</p>
+          <fieldset :if={@form.action == "confirm_queue"}><legend>Проверка dev-ресурсов в Cloudflare</legend>
+            <p>Самостоятельно снимите унаследованную паузу Queue в Cloudflare и проверьте Scheduler. Эта форма сохраняет ваше свидетельство; Symphony не меняет Cloudflare.</p>
+            <label>Название или ID dev Queue<input name="queue_resource" required maxlength="256" value={@form.values["queue_resource"]} /></label>
+            <label>Название или ID dev Scheduler<input name="scheduler_resource" required maxlength="256" value={@form.values["scheduler_resource"]} /></label>
+            <label><input type="checkbox" name="criteria[]" value="queue_active" checked={"queue_active" in Map.get(@form.values, "criteria", [])} /> Queue активна, доставка разрешена</label>
+            <label><input type="checkbox" name="criteria[]" value="scheduler_configured" checked={"scheduler_configured" in Map.get(@form.values, "criteria", [])} /> Scheduler настроен для dev</label>
+            <p>Затем отдельно проверьте приложение и сохраните ручную проверку dev в течение 30 минут. Очередь задач пока останется закрытой.</p>
+          </fieldset>
           <fieldset :if={@form.action == "validate"}><legend>Выполненные проверки</legend>
             <label><input type="checkbox" name="criteria[]" value="app" checked={"app" in Map.get(@form.values, "criteria", [])} /> Приложение и API доступны</label>
             <label><input type="checkbox" name="criteria[]" value="scenario" checked={"scenario" in Map.get(@form.values, "criteria", [])} /> Контрольный сценарий с тестовыми данными выполнен</label>

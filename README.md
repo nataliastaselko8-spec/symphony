@@ -19,6 +19,7 @@ to worker admission, cancellation and cleanup. Its [task publisher](elixir/docs/
 retains publication intent, confines Git writes to the task branch and waits for verified CI.
 A local [operator dashboard](elixir/docs/operator_dashboard.md) authenticates the owner and
 records version-bound validation, pause, cancellation and recovery decisions in the same store.
+It also records manual Queue/Scheduler readiness separately from deployment and application validation.
 An isolated demo is available; Projects-based agent execution is not enabled yet.
 
 ## Running Symphony

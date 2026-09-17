@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.Operator.Policy do
   @moduledoc "Server-owned forms and narrow decisions derived from fresh, scope-bound observations."
   alias SymphonyElixir.DeliveryGate.Command
+  alias SymphonyElixir.GitHubProjects.Delivery.QueueConfirmation
   alias SymphonyElixir.Operator.Decision
 
   @ordinary ~w(manual_dev_validation_required task_pr_not_bound awaiting_review_or_merge pr_draft
@@ -49,14 +50,32 @@ defmodule SymphonyElixir.Operator.Policy do
   end
 
   defp conditions(action, observation, state) do
-    allowed = if action == "recovery", do: @ordinary ++ @broken, else: @ordinary
+    allowed = allowed_reasons(action)
 
     cond do
       observation == nil or not observation.complete -> {:error, :observation_required}
       not Enum.all?(observation.reasons, &(&1 in allowed)) -> {:error, :remote_delivery_blocked}
       not Decision.quiet?(state["cycle"]) -> {:error, :work_unresolved}
-      action != "recovery" and not healthy?(observation) -> {:error, :environment_not_ready}
+      not environment_allowed?(action, observation) -> {:error, :environment_not_ready}
       true -> :ok
+    end
+  end
+
+  defp allowed_reasons("recovery"), do: @ordinary ++ @broken
+  defp allowed_reasons("confirm_queue"), do: @ordinary ++ ["resume_queue_before_dev_validation"]
+  defp allowed_reasons(_), do: @ordinary
+  defp environment_allowed?("recovery", _), do: true
+  defp environment_allowed?("confirm_queue", observation), do: QueueConfirmation.candidate?(observation)
+  defp environment_allowed?(_, observation), do: healthy?(observation)
+
+  defp data("confirm_queue", payload, obs, _, _, _) do
+    if keys?(payload, ~w(reason criteria queue_resource scheduler_resource)) do
+      {:ok,
+       QueueConfirmation.proof_binding(obs)
+       |> Map.merge(Map.take(payload, ~w(criteria queue_resource scheduler_resource)))
+       |> Map.merge(%{"source" => "operator_manual", "confirmed_at_ms" => obs.facts["controller_now_ms"]})}
+    else
+      {:error, :invalid_operator_payload}
     end
   end
 

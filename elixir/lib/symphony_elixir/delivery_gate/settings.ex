@@ -44,7 +44,7 @@ defmodule SymphonyElixir.DeliveryGate.Settings do
         "ssh_hosts" => settings.worker.ssh_hosts,
         "identity" => identity,
         "runtime_contract" => 3,
-        "operator_contract" => "local-v1",
+        "operator_contract" => "local-v2",
         "item_ids" => provider["item_ids"],
         "required_labels" => settings.tracker.required_labels,
         "validation_mode" => "manual"

@@ -49,7 +49,8 @@ stop verification remain rollout prerequisites; this is not a live startup profi
 The [operator dashboard](docs/operator_dashboard.md) provides local authentication and durable
 manual dev validation, pause, cancellation, recovery and additive budgets. The runbook includes
 credential setup and an isolated demo using the actual Runtime/Gate with synthetic observations.
-Reconfirmation after manually unpausing Cloudflare Queue still requires a selected evidence source.
+The panel accepts separate manual Queue/Scheduler confirmation bound to verified deployment evidence;
+application validation must follow within 30 minutes. See the operator runbook for invalidation rules.
 
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).

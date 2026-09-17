@@ -8,7 +8,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
   alias SymphonyElixir.DeliveryGate.{Budget, Effects}
   alias SymphonyElixir.DeliveryRuntime.{HookContext, Policy}
   alias SymphonyElixir.GitHubProjects.Delivery
-  alias SymphonyElixir.GitHubProjects.Delivery.Observation
+  alias SymphonyElixir.GitHubProjects.Delivery.{Observation, QueueConfirmation}
   alias SymphonyElixir.GitHubProjects.Publication
   alias SymphonyElixir.Operator.{Auth, Decision}
   alias SymphonyElixir.Operator.Policy, as: OperatorPolicy
@@ -104,7 +104,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
       gate: context,
       config: state.config,
       settings: state.settings,
-      observation: state.observation,
+      observation: queue_readiness(state, context, state.observation),
       started_at: state.now.(),
       observe: Keyword.get(state.opts, :observer, &Delivery.observe/2),
       options: Keyword.put(Keyword.get(state.opts, :observer_options, []), :context, context)
@@ -140,12 +140,13 @@ defmodule SymphonyElixir.DeliveryRuntime do
 
   def handle_call(:status, _from, state) do
     worker = if state.worker, do: Map.take(state.worker, [:item, :interval, :status, :elapsed_ms, :effects]), else: nil
+    context = DeliveryGate.status(state.gate)
 
     result = %{
-      gate: DeliveryGate.status(state.gate),
+      gate: context,
       worker: worker,
       reason: state.reason,
-      observation: state.observation,
+      observation: queue_readiness(state, context, state.observation),
       observation_age_ms: age(state),
       restart_required: state.restart,
       execution_enabled: false,
@@ -328,6 +329,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
 
   defp new_operator_decision(state, form, payload, observation, started) do
     context = DeliveryGate.status(state.gate)
+    observation = queue_readiness(state, context, observation)
 
     with true <- context.version == form.version and state.settings.gate.scope == form.scope and not state.restart,
          :ok <- operator_observation(state, form, context, observation, started),
@@ -338,6 +340,14 @@ defmodule SymphonyElixir.DeliveryRuntime do
       false -> {:error, :operator_context_changed}
       error -> error
     end
+  end
+
+  defp queue_readiness(_, _, nil), do: nil
+
+  defp queue_readiness(state, context, observation) do
+    now = Keyword.get(state.opts, :wall_now, fn -> System.system_time(:millisecond) end).()
+    observation = QueueConfirmation.apply(observation, context.state, now)
+    %{observation | facts: Map.put(observation.facts, "controller_now_ms", now)}
   end
 
   defp operator_observation(state, form, context, observation, started) do
@@ -503,6 +513,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
 
   defp accept_read(state, %{kind: :full, started_at: started}, {:ok, %Observation{} = observation}) do
     context = DeliveryGate.status(state.gate)
+    observation = queue_readiness(state, context, observation)
 
     with true <- state.now.() - started < freshness(state),
          :ok <- Observation.validate(observation, state.settings, context),

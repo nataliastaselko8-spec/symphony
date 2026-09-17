@@ -1314,7 +1314,11 @@ local version and retain unverified work. Replays MUST NOT duplicate budget or r
 The Elixir operator contract applies validation and eligible cycle completion as one atomic Gate
 transition. It retains pause/problem holds without a cycle and invalidates baseline on restore.
 Old deployment artifacts MUST NOT stand in for fresh Queue readiness after manual intervention.
-See `elixir/docs/operator_dashboard.md` for the disabled rollout boundary and unresolved Queue source.
+The local operator may supplement verified inherited-pause evidence with manual Queue/Scheduler
+testimony bound to the same deployment, artifact and policy hashes. It MUST NOT override deployment
+failures or missing evidence. Application validation must follow within 30 minutes; accepted testimony
+persists for the validated deployment. Changed proof, operator-reported problems or restored state
+require reconfirmation. See `elixir/docs/operator_dashboard.md` for this contract and rollout boundary.
 
 When an implementation supports GitHub App authentication, bound sessions MUST retain an
 immutable App/installation and repository/Project scope while resolving current credentials

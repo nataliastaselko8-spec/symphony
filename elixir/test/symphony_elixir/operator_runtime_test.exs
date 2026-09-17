@@ -4,7 +4,7 @@ defmodule SymphonyElixir.OperatorRuntimeTest do
   alias SymphonyElixir.{Config, DeliveryGate, DeliveryRuntime}
   alias SymphonyElixir.DeliveryGateSupport, as: G
   alias SymphonyElixir.DeliveryObserverSupport, as: F
-  alias SymphonyElixir.GitHubProjects.Delivery.Observation
+  alias SymphonyElixir.GitHubProjects.Delivery.{Observation, QueueConfirmation}
   alias SymphonyElixir.Operator.{Auth, Control, Credential, Decision}
 
   setup do
@@ -42,7 +42,17 @@ defmodule SymphonyElixir.OperatorRuntimeTest do
     end
 
     runtime =
-      start_supervised!({DeliveryRuntime, config: config, gate: gate, task_supervisor: tasks, observer: observer, watch: fn _, _, _, _ -> :ok end, poll_ms: 0, now: fn -> Agent.get(clock, & &1) end})
+      start_supervised!(
+        {DeliveryRuntime,
+         config: config,
+         gate: gate,
+         task_supervisor: tasks,
+         observer: observer,
+         watch: fn _, _, _, _ -> :ok end,
+         poll_ms: 0,
+         now: fn -> Agent.get(clock, & &1) end,
+         wall_now: fn -> 1_800_000_000_000 + Agent.get(clock, & &1) end}
+      )
 
     await(runtime)
 
@@ -77,6 +87,145 @@ defmodule SymphonyElixir.OperatorRuntimeTest do
   defp prepare(c, action), do: Control.prepare(c.auth, c.session, c.runtime, action)
   defp submit(c, form, params), do: Control.execute(c.auth, c.session, form.id, params)
   defp validation, do: %{"reason" => "Manual check passed", "criteria" => Decision.criteria()}
+
+  defp queue_payload, do: %{"reason" => "Resumed dev queue", "criteria" => QueueConfirmation.criteria(), "queue_resource" => "dev-delivery", "scheduler_resource" => "dev-scheduler"}
+
+  defp inherited(c) do
+    deployment =
+      Map.merge(c.facts["deployment"], %{
+        "environment_ready" => false,
+        "complete" => true,
+        "source" => "deployment_evidence",
+        "blockers" => ["resume_queue_before_dev_validation"],
+        "queue" => %{"state" => "paused", "reason" => "inherited_pause"},
+        "scheduler" => "configured",
+        "artifact_id" => 10,
+        "digest" => "sha256:" <> String.duplicate("a", 64)
+      })
+
+    facts = Map.merge(c.facts, %{"deployment" => deployment, "policy_hashes" => %{"workflow" => String.duplicate("a", 64)}})
+    Agent.update(c.remote, fn _ -> {:facts, facts} end)
+    DeliveryRuntime.refresh(c.runtime)
+    # Wait for this new remote value, not merely a previously settled revision.
+    wait_queue(c.runtime)
+    facts
+  end
+
+  defp wait_queue(runtime, attempts \\ 500)
+  defp wait_queue(_, 0), do: flunk("queue observation not ready")
+
+  defp wait_queue(runtime, attempts) do
+    status = await(runtime)
+
+    if get_in(status.observation.facts, ["deployment", "queue", "reason"]) == "inherited_pause",
+      do: status,
+      else:
+        (
+          Process.sleep(10)
+          wait_queue(runtime, attempts - 1)
+        )
+  end
+
+  test "manual Queue confirmation is durable, idempotent and separate from validation and pause", c do
+    inherited(c)
+    {:ok, pause} = prepare(c, "pause")
+    assert {:ok, _} = submit(c, pause, %{"reason" => "Keep task queue paused"})
+    await(c.runtime)
+    {:ok, form} = prepare(c, "confirm_queue")
+    assert {:ok, %{replayed: false}} = submit(c, form, queue_payload())
+    assert {:ok, %{replayed: true}} = submit(c, form, queue_payload())
+    status = await(c.runtime)
+    assert status.observation.facts["deployment"]["environment_ready"]
+    assert status.gate.state["baseline"] == nil
+    refute status.gate.state["queue_confirmation"]["validated"]
+    bootstrap(c)
+    state = DeliveryGate.status(c.gate).state
+    assert state["queue_confirmation"]["validated"]
+    assert state["operator_pause"] != nil
+    assert state["queue_confirmation"]["confirmed_at_ms"] == 1_800_000_000_000
+    stop_supervised!(DeliveryRuntime)
+    stop_supervised!(DeliveryGate)
+    gate = start_supervised!({DeliveryGate, settings: c.settings.gate})
+    assert DeliveryGate.status(gate).state["queue_confirmation"] == state["queue_confirmation"]
+  end
+
+  test "expired Queue testimony rejects an open validation form; new proof cannot reuse it", c do
+    facts = inherited(c)
+    {:ok, form} = prepare(c, "confirm_queue")
+    assert {:ok, _} = submit(c, form, queue_payload())
+    await(c.runtime)
+    {:ok, validation_form} = prepare(c, "validate")
+    Agent.update(c.clock, fn _ -> 1_800_000 end)
+    assert {:error, :operator_context_changed} = submit(c, validation_form, validation())
+    refute DeliveryRuntime.status(c.runtime).observation.facts["deployment"]["environment_ready"]
+    DeliveryRuntime.refresh(c.runtime)
+    # Full observation durably removes expired evidence.
+    wait_confirmation_removed(c.runtime)
+    {:ok, refreshed} = prepare(c, "confirm_queue")
+    assert {:ok, _} = submit(c, refreshed, queue_payload())
+    await(c.runtime)
+    {:ok, form} = prepare(c, "validate")
+    Agent.update(c.remote, fn _ -> {:facts, put_in(facts, ["deployment", "run_attempt"], 2)} end)
+    assert {:error, :operator_context_changed} = submit(c, form, validation())
+    DeliveryRuntime.refresh(c.runtime)
+    wait_confirmation_removed(c.runtime)
+    assert DeliveryGate.status(c.gate).state["baseline"] == nil
+  end
+
+  test "real merged cycle remains owned until Queue then dev validation; old artifact polls preserve testimony", c do
+    options = :sys.get_state(c.runtime).opts
+    stop_supervised!(DeliveryRuntime)
+
+    for {action, args, sha} <- [
+          {"bootstrap", G.validation(), G.sha()},
+          {"reserve", G.task(), G.sha()},
+          {"reserve_ci", G.ci_request(), G.sha()},
+          {"observe_ci", G.ci_result(), G.sha()},
+          {"handoff", %{"pr_number" => 7, "sha" => G.sha("b")}, G.sha()},
+          {"merged", %{"pr_number" => 7, "sha" => G.sha("c")}, G.sha("c")}
+        ] do
+      current = DeliveryGate.status(c.gate)
+      unless action == "observe_ci", do: :ok = DeliveryGate.reconcile(c.gate, current.version, c.settings.gate.scope, sha)
+      assert {:ok, _} = DeliveryGate.execute(c.gate, current.version, "seed-" <> action, action, args)
+    end
+
+    runtime = start_supervised!({DeliveryRuntime, options})
+
+    c = %{
+      c
+      | runtime: runtime,
+        facts: Map.merge(c.facts, %{"dev_sha" => G.sha("c"), "deployment" => G.deployment(), "pr" => %{"number" => 7, "state" => "merged", "merge_sha" => G.sha("c"), "ancestry" => "included"}})
+    }
+
+    inherited(c)
+    {:ok, form} = prepare(c, "confirm_queue")
+    assert {:ok, _} = submit(c, form, queue_payload())
+    status = await(runtime)
+    assert status.gate.state["cycle"]["owner"]["item_id"] == "item-A"
+    assert status.gate.state["cycle"]["phase"] == "awaiting_validation"
+    bootstrap(c)
+    assert DeliveryGate.status(c.gate).state["cycle"] == nil
+    Agent.update(c.clock, fn _ -> 3_600_000 end)
+    DeliveryRuntime.refresh(runtime)
+    status = await(runtime)
+    assert status.observation.facts["deployment"]["environment_ready"]
+    assert status.gate.state["queue_confirmation"]["validated"]
+  end
+
+  defp wait_confirmation_removed(runtime, attempts \\ 500)
+  defp wait_confirmation_removed(_, 0), do: flunk("queue evidence not invalidated")
+
+  defp wait_confirmation_removed(runtime, attempts) do
+    status = await(runtime)
+
+    if status.gate.state["queue_confirmation"] == nil,
+      do: status,
+      else:
+        (
+          Process.sleep(10)
+          wait_confirmation_removed(runtime, attempts - 1)
+        )
+  end
 
   defp bootstrap(c) do
     {:ok, form} = prepare(c, "validate")

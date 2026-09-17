@@ -17,6 +17,7 @@ defmodule SymphonyElixir.DeliveryGate.Command do
   @recovery_limits Keyword.merge(@limits, initial_ms: :positive, ci_attempts: :positive)
   @ci_result {:enum, ["pending", "success", "failure", "cancelled", "unknown"]}
   @schemas %{
+    "invalidate_queue_confirmation" => [],
     "record_restore" => @operator,
     "bootstrap" => @proof ++ @operator ++ [criteria: :strings],
     "reserve" => @task ++ [cycle_id: :text, sha: :sha],

@@ -140,7 +140,7 @@ validation mode. Поэтому store PR-06/07 имеет несовместим
 наблюдение и его возраст, `restart_required`, `execution_enabled: false`.
 Логи остановки содержат issue/interval IDs. PR-10 добавляет защищённую панель и
 allowlisted JSON-проекцию; универсального HTTP-вызова `DeliveryRuntime.command` нет.
-Текущая версия scope — `runtime_contract=3`, `operator_contract=local-v1`.
+Текущая версия scope — `runtime_contract=3`, `operator_contract=local-v2`.
 
 Для локального `remove_recorded` в Projects сохраняется проверка текущего workspace root;
 сохранённый путь не разрешает удалить одноимённую папку за его пределами. Remote transport
@@ -148,8 +148,13 @@ allowlisted JSON-проекцию; универсального HTTP-вызов�
 
 `deployment success`, readiness по артефакту и ручная validation остаются отдельными
 состояниями. `resume_queue_before_dev_validation` не превращается в ошибку кода.
-После снятия паузы старый артефакт не обновляется; источник свежего состояния Queue
-остаётся решением до PR-10/пилота. Этот PR не обращается к Cloudflare.
+После снятия паузы старый артефакт не обновляется. В PR-10 выбран отдельный ручной
+источник: форма Queue/Scheduler, связанная с проверенным proof/artifact/policy.
+До ручной validation она действует 30 минут; после принятия — для той же базы.
+Runtime использует общую проверку `QueueConfirmation` при poll, показе и отправке
+форм. Изменение контекста/expiry сохраняется через Gate, restore и сообщение о
+проблеме аннулируют свидетельство. [Полный контракт](operator_dashboard.md).
+Cloudflare API не вызывается; новая форма сама по себе очередь задач не открывает.
 
 Проверки: реальные OTP процессы и Linux store, контролируемые часы, сбои записи/чтения,
 одноразовые разрешения, отмена/late watch, supervisor restart, ожидание CI/deployment,

@@ -50,9 +50,9 @@ end
 observer = fn _, opts ->
   cycle = opts[:context].state["cycle"]
   pr = if cycle, do: %{"number" => 7, "head_sha" => G.sha("b"), "state" => "merged", "merge_sha" => G.sha("c"), "ancestry" => "included"}
-  deployment = Map.merge(G.deployment(), %{"queue" => %{"state" => "active", "reason" => "resumed"}, "scheduler" => "configured"})
+  deployment = Map.merge(G.deployment(), %{"environment_ready" => false, "complete" => true, "source" => "deployment_evidence", "queue" => %{"state" => "paused", "reason" => "inherited_pause"}, "scheduler" => "configured", "blockers" => ["resume_queue_before_dev_validation"], "artifact_id" => 10, "digest" => "sha256:" <> String.duplicate("a", 64)})
   row = %{"item_id" => "item-R", "eligible" => true, "archived" => false, "issue_state" => "OPEN", "state" => "Ready for agent", "native_ref" => %{"repo" => settings.repo, "issue_id" => "issue-R"}}
-  facts = %{"repo" => settings.repo, "dev_sha" => G.sha("c"), "deployment" => deployment, "pr" => pr, "project" => %{"items" => [row]}, "open_pr_numbers" => [], "watch_digest" => String.duplicate("a", 64)}
+  facts = %{"repo" => settings.repo, "dev_sha" => G.sha("c"), "deployment" => deployment, "policy_hashes" => %{"workflow" => String.duplicate("a", 64)}, "pr" => pr, "project" => %{"items" => [row]}, "open_pr_numbers" => [], "watch_digest" => String.duplicate("a", 64)}
   {:ok, Observation.new(settings, opts[:context], facts, ["manual_dev_validation_required"])}
 end
 

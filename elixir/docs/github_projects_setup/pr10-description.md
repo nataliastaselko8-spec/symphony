@@ -13,7 +13,9 @@ The retained delivery cycle needs authenticated owner decisions before work can 
 - Recheck fresh deployment and PR evidence; reject stale forms and replay decisions without duplicate grants.
 - Apply validation and eligible completion atomically; preserve ownership and uncertain work.
 - Add a Russian dashboard, setup command, fixture demo and operational documentation.
-- Keep Projects execution disabled and inherited Queue pause blocked until its evidence source is selected.
+- Add separate manual Queue/Scheduler evidence with a 30-minute window before dev validation.
+- Invalidate changed or restored Queue evidence; preserve accepted testimony for the verified deployment.
+- Keep Projects execution disabled until worker integration and acceptance.
 
 #### Alternatives
 
@@ -22,7 +24,8 @@ The retained delivery cycle needs authenticated owner decisions before work can 
 
 #### Test Plan
 
-- [x] `make -C elixir all` stages: 540 Elixir tests, 0 failures, 6 skipped; 100% measured coverage; Dialyzer 0 errors.
+- [x] `make -C elixir all`: 548 Elixir tests, 0 failures, 6 skipped; 100% measured coverage; Dialyzer 0 errors.
 - [x] 17 Python store/publisher tests; auth, stale forms, concurrent pause and worker stop tests.
 - [x] Desktop demo: login, manual validation, competing forms and logout; narrow-screen layout check.
+- [x] Queue testimony: stale proof, expiry, missing evidence, restart, recovery/cancel and separate browser forms.
 - [x] `mix pr_body.check --file docs/github_projects_setup/pr10-description.md` and `git diff --check`.

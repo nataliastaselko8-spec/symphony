@@ -8,7 +8,7 @@ defmodule SymphonyElixir.DeliveryGate.State do
   @budget_errors [:time_budget_exhausted, :fix_budget_exhausted, :ci_budget_exhausted, :retry_budget_exhausted]
 
   @spec new() :: map()
-  def new, do: %{"status" => "bootstrap_required", "baseline" => nil, "cycle" => nil, "last_cycle" => nil, "operator_pause" => nil, "environment_problem" => nil}
+  def new, do: %{"status" => "bootstrap_required", "baseline" => nil, "cycle" => nil, "last_cycle" => nil, "operator_pause" => nil, "environment_problem" => nil, "queue_confirmation" => nil}
 
   @spec apply_command(map(), String.t(), map()) :: {:ok, map()} | {:error, atom()}
   def apply_command(state, action, args) do
@@ -38,8 +38,9 @@ defmodule SymphonyElixir.DeliveryGate.State do
     {:ok, %{state | "status" => "idle", "baseline" => validated_proof(args)}}
   end
 
-  defp transition(%{"cycle" => nil} = state, "record_restore", _args), do: {:ok, Map.put(state, "baseline", nil)}
-  defp transition(state, "record_restore", _args), do: put_cycle(Map.put(state, "baseline", nil), uncertain_cycle(state["cycle"]))
+  defp transition(%{"cycle" => nil} = state, "record_restore", _args), do: {:ok, Map.merge(state, %{"baseline" => nil, "queue_confirmation" => nil})}
+  defp transition(state, "record_restore", _args), do: put_cycle(Map.merge(state, %{"baseline" => nil, "queue_confirmation" => nil}), uncertain_cycle(state["cycle"]))
+  defp transition(state, "invalidate_queue_confirmation", _args), do: {:ok, Map.merge(state, %{"queue_confirmation" => nil, "baseline" => nil})}
 
   defp transition(%{"status" => "idle", "cycle" => nil} = state, "reserve", args) do
     if args["sha"] == state["baseline"]["sha"] do

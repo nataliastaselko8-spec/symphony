@@ -167,7 +167,7 @@ defmodule SymphonyElixir.OperatorWebTest do
       preview: nil
     }
 
-    for action <- ["validate", "pause", "problem", "cancel", "review_resume", "recovery", "extend_budget"] do
+    for action <- ["validate", "pause", "problem", "cancel", "review_resume", "recovery", "extend_budget", "confirm_queue"] do
       current = View.preview(%{form | action: action}, %{"initial_minutes" => "5", "fix_minutes" => "3", "fixes" => "1", "ci_attempts" => "1", "retries_per_sha" => "1"})
       html = render_component(&OperatorPanel.panel/1, model: model, form: current, error: "Ошибка", notice: "Сохранено", busy: true, demo: true)
       assert html =~ "Демонстрация"
@@ -194,7 +194,18 @@ defmodule SymphonyElixir.OperatorWebTest do
     facts = %{
       # No unrelated PR may be present when validating the initial baseline.
       "dev_sha" => G.sha(),
-      "deployment" => G.deployment("a"),
+      "deployment" =>
+        Map.merge(G.deployment("a"), %{
+          "environment_ready" => false,
+          "complete" => true,
+          "source" => "deployment_evidence",
+          "queue" => %{"state" => "paused", "reason" => "inherited_pause"},
+          "scheduler" => "configured",
+          "blockers" => ["resume_queue_before_dev_validation"],
+          "artifact_id" => 10,
+          "digest" => "sha256:" <> String.duplicate("a", 64)
+        }),
+      "policy_hashes" => %{"workflow" => String.duplicate("a", 64)},
       "project" => %{"items" => []},
       "open_pr_numbers" => []
     }
@@ -206,6 +217,23 @@ defmodule SymphonyElixir.OperatorWebTest do
     endpoint_config = Keyword.put(Application.get_env(:symphony_elixir, Endpoint), :operator_runtime, runtime)
     Endpoint.config_change([{Endpoint, endpoint_config}], [])
     {:ok, view, _} = live(conn(c), "/")
+    assert has_element?(view, "button[phx-value-action=validate][disabled]")
+    html = render_click(view, "operator_prepare", %{"action" => "confirm_queue"})
+    id = html |> Floki.parse_document!() |> Floki.find("input[name=form_id]") |> Floki.attribute("value") |> hd()
+    assert html =~ "Название или ID dev Queue"
+    payload = %{"form_id" => id, "reason" => "Queue checked", "queue_resource" => "dev-delivery", "scheduler_resource" => "dev-scheduler", "criteria" => ["queue_active", "scheduler_configured"]}
+    render_change(view, "operator_preview", payload)
+    assert has_element?(view, "input[value=queue_active][checked]")
+    render_submit(view, "operator_submit", Map.put(payload, "criteria", ["queue_active"]))
+    assert render_async(view) =~ "обе галочки"
+    assert DeliveryGate.status(gate).state["queue_confirmation"] == nil
+    render_submit(view, "operator_submit", payload)
+    assert render_async(view) =~ "Решение сохранено"
+    runtime_ready(runtime)
+    send(view.pid, :runtime_tick)
+    assert render(view) =~ "автоматического чтения Cloudflare нет"
+    assert render(view) =~ "В течение 30 минут"
+    assert DeliveryGate.status(gate).state["baseline"] == nil
     html = render_click(view, "operator_prepare", %{"action" => "validate"})
     id = html |> Floki.parse_document!() |> Floki.find("input[name=form_id]") |> Floki.attribute("value") |> hd()
     assert html =~ G.sha()
@@ -216,6 +244,8 @@ defmodule SymphonyElixir.OperatorWebTest do
     assert render_async(view) =~ "Решение сохранено"
     assert DeliveryGate.status(gate).state["baseline"]["actor"] == "local:owner"
     runtime_ready(runtime)
+    send(view.pid, :runtime_tick)
+    assert render(view) =~ "Принято вместе с ручной проверкой dev"
     html = render_click(view, "operator_prepare", %{"action" => "pause"})
     id = html |> Floki.parse_document!() |> Floki.find("input[name=form_id]") |> Floki.attribute("value") |> hd()
     render_submit(view, "operator_submit", %{"form_id" => id, "reason" => "Maintenance", "actor" => "forged"})

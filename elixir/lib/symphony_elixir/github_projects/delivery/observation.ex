@@ -72,7 +72,8 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Observation do
   def commands(observation, settings, context) do
     with :ok <- validate(observation, settings, context),
          true <- context.version != nil do
-      {:ok, command_candidates(observation.facts, context.state["cycle"])}
+      invalidation = if observation.facts["queue_confirmation_invalidated"] == true, do: [%{action: "invalidate_queue_confirmation", args: %{}}], else: []
+      {:ok, invalidation ++ command_candidates(observation.facts, context.state["cycle"])}
     else
       false -> {:error, :observer_context_required}
       error -> error

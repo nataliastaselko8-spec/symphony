@@ -2,10 +2,11 @@ defmodule SymphonyElixir.Operator.Decision do
   @moduledoc "Closed durable operator decisions. Authentication and fresh evidence belong to the controller boundary."
 
   alias SymphonyElixir.DeliveryGate.{Budget, Command, Effects, State}
+  alias SymphonyElixir.GitHubProjects.Delivery.QueueConfirmation
 
   @criteria ["app", "scenario", "services"]
   @restrictive ~w(pause problem cancel)
-  @actions @restrictive ++ ~w(unpause validate recovery resume review_resume extend_budget finish_cancel)
+  @actions @restrictive ++ ~w(unpause confirm_queue validate recovery resume review_resume extend_budget finish_cancel)
 
   @spec actions() :: [String.t()]
   def actions, do: @actions
@@ -56,6 +57,9 @@ defmodule SymphonyElixir.Operator.Decision do
       else: {:error, :criteria_required}
   end
 
+  defp validate_data("confirm_queue", data, _, _),
+    do: if(QueueConfirmation.valid_data?(data), do: :ok, else: {:error, :invalid_queue_confirmation})
+
   defp validate_data(kind, data, actor, reason) do
     command = if kind == "recovery", do: "assign_recovery", else: kind
     Command.validate(command, Map.merge(data, %{"actor" => actor, "reason" => reason}))
@@ -65,7 +69,7 @@ defmodule SymphonyElixir.Operator.Decision do
   defp decide(state, "unpause", _), do: {:ok, Map.put(state, "operator_pause", nil)}
 
   defp decide(state, "problem", args) do
-    state = %{state | "environment_problem" => args, "baseline" => nil}
+    state = %{state | "environment_problem" => args, "baseline" => nil, "queue_confirmation" => nil}
 
     if state["cycle"],
       do: State.apply_command(state, "block", %{"reason" => "operator_reported_problem"}),
@@ -73,7 +77,23 @@ defmodule SymphonyElixir.Operator.Decision do
   end
 
   defp decide(state, "validate", args) do
-    if quiet?(state["cycle"]), do: validate_state(state, args), else: {:error, :work_unresolved}
+    with true <- quiet?(state["cycle"]),
+         {:ok, validated} <- validate_state(state, args) do
+      evidence = state["queue_confirmation"]
+
+      if evidence && Command.proof(evidence) == Command.proof(args),
+        do: {:ok, Map.put(validated, "queue_confirmation", Map.put(evidence, "validated", true))},
+        else: {:ok, validated}
+    else
+      false -> {:error, :work_unresolved}
+      error -> error
+    end
+  end
+
+  defp decide(state, "confirm_queue", args) do
+    if quiet?(state["cycle"]),
+      do: {:ok, Map.merge(state, %{"queue_confirmation" => Map.put(args, "validated", false), "baseline" => nil})},
+      else: {:error, :work_unresolved}
   end
 
   defp decide(state, "cancel", args), do: State.apply_command(state, "request_cancel", args)

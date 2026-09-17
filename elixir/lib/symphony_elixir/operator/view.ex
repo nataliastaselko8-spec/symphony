@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.Operator.View do
   @moduledoc "Allowlisted Russian operator presentation; no raw store or credential data reaches the browser."
   alias SymphonyElixir.DeliveryGate.{Budget, Command}
+  alias SymphonyElixir.GitHubProjects.Delivery.QueueConfirmation
   alias SymphonyElixir.Operator.{Decision, Policy}
 
   @labels %{
@@ -9,6 +10,7 @@ defmodule SymphonyElixir.Operator.View do
     "cancel" => "Запросить отмену",
     "unpause" => "Снять операторскую паузу",
     "validate" => "Подтвердить ручную проверку dev",
+    "confirm_queue" => "Подтвердить состояние Queue",
     "recovery" => "Назначить recovery",
     "resume" => "Продолжить ту же задачу",
     "review_resume" => "Вернуть PR на доработку",
@@ -89,12 +91,13 @@ defmodule SymphonyElixir.Operator.View do
       pr_state: pr["state"],
       sha: facts["dev_sha"],
       deployment: Map.take(deployment, ~w(sha result workflow_id run_id run_attempt environment_ready queue scheduler)),
+      queue_confirmation: queue_confirmation(facts),
       run_url: github_url(repo, "/actions/runs/", deployment["run_id"]),
       ci: Map.take(facts["ci"] || %{}, ~w(result run_id run_attempt sha failure_kind)),
       observed_at: observation && observation.observed_at,
       age_ms: status.observation_age_ms,
       reason: current_reason(state, observation, reason),
-      readiness: readiness(deployment),
+      readiness: readiness(deployment, facts["manual_queue_confirmation"]),
       validation: validation(cycle, state),
       budget: budget(cycle),
       actions: actions(status),
@@ -115,6 +118,12 @@ defmodule SymphonyElixir.Operator.View do
       else: message(reason)
   end
 
+  defp current_reason(_, observation, "environment_not_ready") when not is_nil(observation) do
+    if "resume_queue_before_dev_validation" in observation.reasons,
+      do: message("resume_queue_before_dev_validation"),
+      else: message(:environment_not_ready)
+  end
+
   defp current_reason(_, _, reason), do: message(reason)
 
   @spec message(term()) :: String.t()
@@ -124,13 +133,14 @@ defmodule SymphonyElixir.Operator.View do
   def message(:operator_form_expired), do: "Форма устарела. Откройте её заново."
   def message(:criteria_required), do: "Подтвердите все три проверки."
   def message(:operator_reason_required), do: "Добавьте комментарий о проверке или причине решения."
+  def message(:invalid_operator_decision), do: "Проверьте заполнение формы. Для Queue нужны оба ресурса, обе галочки и комментарий."
   def message(:ready_allowed_item_required), do: "Нужна разрешённая карточка Ready for agent в текущем Project."
   def message(:positive_budget_required), do: "Укажите положительное добавление бюджета. Для recovery нужны время работы и CI."
   def message(:close_pr_or_validate_merged_dev), do: "Закройте ненужный PR в GitHub; после merge требуется проверка dev."
   def message(:environment_not_ready), do: "Среда ещё не готова. Проверьте deployment, Scheduler и Cloudflare Queue."
   def message(:work_unresolved), do: "Остановка или внешняя операция ещё не подтверждена."
   def message(:operator_read_rate_limited), do: "Слишком много повторных проверок. Подождите минуту; пауза и отмена доступны."
-  def message("resume_queue_before_dev_validation"), do: "Cloudflare Queue сохранила паузу. Источник подтверждения снятия паузы ещё не настроен."
+  def message("resume_queue_before_dev_validation"), do: "Деплой выполнен. Проверьте снятие паузы Queue и Scheduler в Cloudflare, затем подтвердите состояние Queue."
   def message("manual_dev_validation_required"), do: "Нужна ручная проверка dev"
   def message("operator_hold"), do: "Сохранена операторская пауза или сообщение о проблеме"
   def message(reason) when is_atom(reason), do: reason |> Atom.to_string() |> message()
@@ -147,7 +157,14 @@ defmodule SymphonyElixir.Operator.View do
     unpause = unpause_available?(status)
 
     Enum.map(Decision.actions(), fn action ->
-      enabled = enabled?(action, cycle, %{base: base, stopped: stopped, unpause: unpause, paused: status.gate.state["operator_pause"] != nil})
+      enabled =
+        enabled?(action, cycle, %{
+          base: base,
+          stopped: stopped,
+          unpause: unpause,
+          queue: stopped and not status.restart_required and QueueConfirmation.candidate?(status.observation),
+          paused: status.gate.state["operator_pause"] != nil
+        })
 
       %{
         id: action,
@@ -165,6 +182,7 @@ defmodule SymphonyElixir.Operator.View do
   defp enabled?(action, _, _) when action in ~w(pause problem), do: true
   defp enabled?("cancel", %{"cancellation" => nil}, _), do: true
   defp enabled?("unpause", _, context), do: context.unpause and context.paused
+  defp enabled?("confirm_queue", _, context), do: context.queue
   defp enabled?("validate", nil, context), do: context.base
   defp enabled?("validate", %{"phase" => phase}, context) when phase in ~w(needs_human_decision awaiting_review awaiting_validation cancelling), do: context.base
   defp enabled?("recovery", %{"phase" => "needs_human_decision", "recovery" => nil, "cancellation" => nil}, context), do: context.stopped
@@ -177,6 +195,9 @@ defmodule SymphonyElixir.Operator.View do
   defp readiness(%{"environment_ready" => true}), do: "Готовность подтверждена deployment evidence"
   defp readiness(%{"queue" => %{"reason" => "inherited_pause"}}), do: "Cloudflare Queue сохранила исходную паузу"
   defp readiness(_), do: "Готовность среды не подтверждена"
+  defp readiness(deployment, nil), do: readiness(deployment)
+  defp readiness(_, _), do: "Queue и Scheduler подтверждены оператором; автоматического чтения Cloudflare нет"
+  defp queue_confirmation(facts), do: Map.take(facts["manual_queue_confirmation"] || %{}, ~w(actor reason confirmed_at_ms validated queue_resource scheduler_resource))
   defp validation(_, %{"environment_problem" => problem}) when not is_nil(problem), do: "Оператор сообщил о проблеме; положительного подтверждения нет"
   defp validation(nil, %{"baseline" => nil}), do: "Исходный dev ещё не подтверждён"
   defp validation(nil, _), do: "Сохранено подтверждение базы; актуальность проверяется перед допуском"
