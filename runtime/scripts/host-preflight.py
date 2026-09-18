@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Read-only host diagnostics; no installs, firewall changes, or task launch."""
 import argparse
-import configparser
 import grp
 import json
 import os
@@ -12,6 +11,9 @@ import subprocess
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 from symphony_runtime.common import Rejected, require
+from symphony_runtime.host_checks import wsl_settings
+from symphony_runtime.seccomp import restrict, trusted_file
+from symphony_runtime.common import read_json
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--worker", required=True)
@@ -31,6 +33,7 @@ def check(name, fn):
 check("root_diagnostics", lambda: require(os.geteuid() == 0, "run_host_diagnostics_as_root"))
 check("systemd", lambda: require(Path("/proc/1/comm").read_text().strip() == "systemd", "systemd_required"))
 check("cgroup_v2", lambda: require(Path("/sys/fs/cgroup/cgroup.controllers").is_file(), "cgroup_v2_required"))
+check("container_seccomp_profile", lambda: restrict(read_json(trusted_file(Path('/usr/share/containers/seccomp.json')))))
 for tool in ("podman", "pasta", "sshd", "ssh", "iptables-nft", "ip6tables-nft", "systemd-run", "prlimit", "newuidmap", "newgidmap"):
     check(tool, lambda tool=tool: require(shutil.which(tool), "missing_" + tool))
 
@@ -64,13 +67,7 @@ check("local_pinned_image", image)
 def wsl():
     if "microsoft" not in os.uname().release.lower():
         return
-    parser = configparser.ConfigParser()
-    parser.read("/etc/wsl.conf")
-    for section, setting in (("automount", "enabled"), ("automount", "mountFsTab"), ("interop", "enabled"), ("interop", "appendWindowsPath")):
-        require(parser.getboolean(section, setting, fallback=True) is False, "dedicated_wsl_configuration_required")
-    require(not Path("/proc/sys/fs/binfmt_misc/WSLInterop").exists(), "wsl_restart_required")
-    mounts = Path("/proc/self/mountinfo").read_text()
-    require(not any(" /mnt/c " in row or " /mnt/d " in row for row in mounts.splitlines()), "windows_drives_still_mounted")
+    wsl_settings()
 
 
 check("dedicated_wsl_settings", wsl)

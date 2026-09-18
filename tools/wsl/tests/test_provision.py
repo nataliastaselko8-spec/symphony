@@ -52,6 +52,15 @@ class ProvisionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "asset_not_allowed"):
                 p.asset({**self.request, "role": "worker", "asset": name, "size": 1, "sha256": "b" * 64})
 
+    def test_preflight_reports_only_bounded_reason_codes(self):
+        p.require_preflight({'host_prerequisites_ready': True})
+        for reason, expected in (('missing_podman', 'host_preflight_podman_missing_podman'),
+                                 ('secret https://example.invalid/token', 'host_preflight_not_ready')):
+            with self.assertRaises(ValueError) as raised:
+                p.require_preflight({'host_prerequisites_ready': False, 'checks': [
+                    {'check': 'podman', 'status': 'NOT_READY', 'reason': reason}]})
+            self.assertEqual(str(raised.exception), expected)
+
     def test_symlink_parent_is_not_followed(self):
         outside = self.root / "outside"
         outside.mkdir()

@@ -12,6 +12,7 @@ import time
 from .common import Rejected, lease_clock, no_links, read_json, require
 from .network import Firewall, host_addresses
 from .cgroups import service_group, resources
+from . import seccomp
 
 
 def run(*args, allowed=(0,)):
@@ -47,6 +48,7 @@ class HostSession:
         self.image = image
         self.policy_dir = Path("/run/symphony-runtime") / name
         self.policy = self.policy_dir / "network.json"
+        self.seccomp_file = self.policy_dir / "worker-seccomp.json"
         self.firewall = None
         self.installed = False
         self.started = False
@@ -59,6 +61,7 @@ class HostSession:
         require(parent.stat().st_uid == 0 and parent.stat().st_mode & 0o022 == 0, "unsafe_policy_parent")
         self.policy_dir.mkdir(mode=0o755)
         try:
+            self.seccomp_digest = seccomp.install(self.seccomp_file)
             # systemd may live below a per-distro WSL subtree. Explicitly place
             # the unit in its system.slice, then verify the real unit path.
             parent = run("/usr/bin/systemctl", "show", "system.slice", "--property=ControlGroup", "--value")
@@ -110,11 +113,13 @@ class HostSession:
         require(run("/usr/bin/systemctl", "show", self.unit, "--property=ControlGroup", "--value") == "/" + self.group,
                 "service_cgroup_changed")
         require(resources("/" + self.group) == self.cgroup_inode, "service_cgroup_replaced")
+        seccomp.verify(self.seccomp_file, self.seccomp_digest)
         for family in (4, 6):
             self.firewall.rule(family, "-C", "OUTPUT", *self.firewall.jump())
         value = {"ready": True, "image": self.image, "cgroup": "/" + self.group,
                  "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
                  "cgroup_inode": self.cgroup_inode,
+                 "seccomp_sha256": self.seccomp_digest,
                  "valid_until_monotonic": lease_clock() + 20}
         temporary = self.policy_dir / "network.pending"
         with temporary.open("w", encoding="utf-8") as stream:
@@ -185,7 +190,7 @@ ForceCommand /usr/bin/python3 -I -B {relay}
         if self.installed:
             self.firewall.remove()
         # Explicit files only; no recursive delete of a configured path.
-        for name in ("network.json", "network.pending", "management_host_key", "management_host_key.pub", "authorized_keys", "sshd_config", "sshd.pid", "relay.py", "relay.json"):
+        for name in ("network.json", "network.pending", "worker-seccomp.json", "management_host_key", "management_host_key.pub", "authorized_keys", "sshd_config", "sshd.pid", "relay.py", "relay.json"):
             (self.policy_dir / name).unlink(missing_ok=True)
         if self.policy_dir.exists():
             self.policy_dir.rmdir()

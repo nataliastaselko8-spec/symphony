@@ -15,6 +15,7 @@ from .common import Rejected, atomic, canonical, command, digest, identifier, le
 from .storage import capacity, collect, retire
 from .images import collect_images, register
 from .cgroups import service_group, current_group, resources
+from . import seccomp
 
 MAX_BUNDLE = 80 * 1024 * 1024
 MAX_HEADER = 16384
@@ -73,6 +74,7 @@ class Guardian:
         require(":" not in str(self.root), "mount_path_contains_separator")
         require(not self.root.is_relative_to("/mnt") and self.root != Path.home(), "dedicated_linux_storage_required")
         self.image, self.cgroup, self.policy_file = image, cgroup, no_links(policy_file)
+        self.seccomp_file = self.policy_file.parent / 'worker-seccomp.json'
         self.podman, self.clock = podman, clock
         self.mutex = threading.RLock()
         self.record = read_json(private_file(self.root / "resource.json")) if (self.root / "resource.json").exists() else None
@@ -95,6 +97,7 @@ class Guardian:
         require(policy.get("image") == self.image and policy.get("ready") is True, "network_policy_not_ready")
         require(policy.get("cgroup_inode") == (Path("/sys/fs/cgroup") / self.cgroup.lstrip("/")).stat().st_ino, "network_policy_stale")
         resources(self.cgroup)
+        seccomp.verify(self.seccomp_file, policy.get('seccomp_sha256'))
         require(type(policy.get("valid_until_monotonic")) in (int, float) and self.clock() < policy["valid_until_monotonic"], "network_policy_expired")
 
     def save(self):
@@ -114,6 +117,7 @@ class Guardian:
         # This allowlist is code-owned. A request cannot append options, mounts, or an entrypoint.
         args = ["run", "--name", name, "--pull=never", "--userns=keep-id:uid=10001,gid=10001",
                 "--user=10001:10001", "--read-only", "--cap-drop=all", "--security-opt=no-new-privileges",
+                "--security-opt=seccomp=" + str(self.seccomp_file),
                 "--cgroupns=private", "--pid=private", "--ipc=private", "--pids-limit=512", "--memory=2g", "--cpus=2",
                 "--log-driver=k8s-file", "--log-opt=max-size=2097152",
                 "--ulimit=fsize=268435456:268435456",

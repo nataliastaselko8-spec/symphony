@@ -132,6 +132,11 @@ try {
         Invoke-Provision $state 'worker' 'worker' @{manifest=$manifest; public_key=$script:controllerInfo.public_key; port=$state.management_port} | Out-Null
     }
     Invoke-Stage $state 'isolation-smoke' {
+        # A valid, inert Windows probe is copied as test input, never mounted.
+        # The container must reject it even if another WSL distro enables interop.
+        $canary = Get-Item -LiteralPath (Join-Path $env:WINDIR 'System32/cmd.exe')
+        $canaryHash = (Get-FileHash -LiteralPath $canary.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        Invoke-Provision $state 'worker' 'receive' @{asset='windows_canary'; size=$canary.Length; sha256=$canaryHash} $canary.FullName | Out-Null
         # Exercise both distro systemd trees together, as in normal operation.
         $controllerKeeper = New-NativeProcess (Wsl-Path) @('-d',$state.distros.controller,'-u','symphony','--cd','/','--exec','python3','-I','-c','import sys;sys.stdin.buffer.read()') -Redirect
         try { $report = Invoke-Provision $state 'worker' 'smoke' }

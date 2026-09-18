@@ -152,7 +152,40 @@ Setup теперь удерживает controller во время isolation smo
 Механизм обновления/переноса незавершённой установки в этот фикс не входит.
 Новый комплект собирается отдельно; исходный принятый комплект не изменяется.
 
-### Оставшиеся проверки
+### Дополнительный отказ host preflight и исправление Interop 2026-09-18
+
+Вторая чистая установка остановилась на `worker-image-and-host` с общим
+`command_failed_python3`. Прямой запуск диагностики показал единственный отказ:
+`dedicated_wsl_settings / wsl_restart_required`. Образ, IDs, пакеты, cgroups и
+остальные prerequisites были готовы; в обоих wsl.conf Interop выключен и диски
+Windows не смонтированы. Браузерный login и продуктовые задачи ещё не запускались.
+
+Причина ложного отказа — требование отсутствия записи `/proc/sys/fs/binfmt_misc/WSLInterop`.
+Реестр общий для VM, поэтому его сохраняет обычная Ubuntu с включённым Interop.
+Это согласуется с [реализацией защиты binfmt в WSL](https://github.com/microsoft/WSL/blob/master/src/linux/init/init.cpp)
+и [настройками Interop для отдельных дистрибутивов](https://learn.microsoft.com/en-us/windows/wsl/wsl-config#interop-settings).
+Глобальная запись не удаляется. Preflight проверяет настройки и отсутствие Windows
+mounts, включая нестандартные точки; принятие контейнера остаётся отдельным gate.
+
+Расширенный smoke выявил, что стандартный профиль Podman допускает AF_VSOCK.
+Runtime теперь сужает системный deny-by-default seccomp-профиль: только x86_64 ABI,
+socket/socketpair только Unix/IPv4/IPv6/netlink, без socketcall и host AF_VSOCK.
+Остальные ограничения профиля сохранены. Root-owned результат и его SHA256 связаны
+с lease; guardian и supervisor обнаруживают изменение и закрывают gate.
+
+При работающих новых Controller/Worker и обычной Ubuntu с Interop полный smoke
+прошёл: `HOST_VSOCK_BLOCKED`, `COMPAT_ABI_BLOCKED`, `WINDOWS_EXECUTION_BLOCKED`,
+ресурсы/файловая граница/публичный HTTPS/приватная сеть/SSH/остановка/экспорт/restart
+guardian — PASS. Остановка при утрате controller: 45,51 секунды. Canary — копия
+системного cmd.exe с командой печати маркера; без Windows mounts и без секретов.
+
+71 runtime test, 33 installer/operator/bundle tests и сценарий PowerShell wizard
+прошли. Неуспешный host preflight теперь возвращает конкретный ограниченный код
+причины вместо потери JSON-диагностики в `command_failed_python3`.
+Изменение комплекта до первого конфигурирования выполняется с сохранением старых
+сгенерированных файлов отдельно; секреты и рабочие задачи при этом не переносятся.
+
+### Приёмка после исправлений
 
 До признания первой поставки принятой остаются полный Setup из её manifest на двух
 новых WSL-дистрибутивах, реальный isolation smoke внутри них, GitHub read inspection,

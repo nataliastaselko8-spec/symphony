@@ -264,6 +264,7 @@ class RuntimeTest(unittest.TestCase):
         value.started_at = 0
         value.heartbeat_at = 0
         value.cgroup = "/system.slice/symphony-fixture.service"
+        value.seccomp_file = Path('/run/symphony-runtime/fixture/worker-seccomp.json')
         return value
 
     def test_old_interval_and_additional_request_fields_are_rejected(self):

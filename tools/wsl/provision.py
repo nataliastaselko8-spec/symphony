@@ -27,7 +27,7 @@ def need(ok, reason):
         raise ValueError(reason)
 
 
-def run(argv, *, user=None, cwd=None, env=None, timeout=1800, stdin=None):
+def run(argv, *, user=None, cwd=None, env=None, timeout=1800, stdin=None, allowed=(0,)):
     environment = {"PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "C.UTF-8",
                    "DEBIAN_FRONTEND": "noninteractive"}
     if user:
@@ -38,7 +38,7 @@ def run(argv, *, user=None, cwd=None, env=None, timeout=1800, stdin=None):
     result = subprocess.run(argv, cwd=cwd, env=environment, stdin=stdin or subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
     # apt/build errors can contain remote URLs; never print arbitrary stderr or request bodies.
-    need(result.returncode == 0, "command_failed_" + Path(argv[0]).name)
+    need(result.returncode in allowed, "command_failed_" + Path(argv[0]).name)
     return result.stdout.decode("utf-8", errors="replace").strip()
 
 
@@ -107,11 +107,12 @@ def claim(request):
 
 def asset(request):
     name = request["asset"]
-    allowed = {"controller": {"mise", "symphony", "profile", "pem"}, "worker": {"runtime", "worker_image"}}
+    allowed = {"controller": {"mise", "symphony", "profile", "pem"}, "worker": {"runtime", "worker_image", "windows_canary"}}
     need(name in allowed[request["role"]], "asset_not_allowed_in_role")
     need(type(request["size"]) is int and 0 < request["size"] <= 32 * 1024**3 and
          re.fullmatch(r"[0-9a-f]{64}", request["sha256"]), "invalid_asset")
     need(name != "pem" or request["size"] <= 32768, "pem_too_large")
+    need(name != "windows_canary" or request["size"] <= 2 * 1024**2, "canary_too_large")
     return STAGE / request["id"] / name
 
 
@@ -274,10 +275,23 @@ def worker(request):
             "name": "install-" + request["id"][:20], "management_port": port,
             "management_public_key": public_key(request["public_key"]).strip()}
     write("/etc/symphony/host.json", json.dumps(host, sort_keys=True).encode(), immutable=True)
-    report = run(["python3", "-I", "-B", str(package / "scripts/host-preflight.py"), "--worker", user, "--image", manifest["worker_image"]])
+    report = run(["python3", "-I", "-B", str(package / "scripts/host-preflight.py"), "--worker", user, "--image", manifest["worker_image"]], allowed=(0, 2))
     result = json.loads(report)
-    need(result.get("host_prerequisites_ready") is True, "host_preflight_not_ready")
+    require_preflight(result)
     return result
+
+
+def require_preflight(result):
+    if result.get("host_prerequisites_ready") is True:
+        return
+    # Only bounded machine codes, never arbitrary command output or secrets.
+    failures = [row for row in result.get("checks", []) if row.get("status") == "NOT_READY"]
+    reason = "host_preflight_not_ready"
+    if failures:
+        candidate = "host_preflight_" + str(failures[0].get("check", "")) + "_" + str(failures[0].get("reason", ""))
+        if re.fullmatch(r"[a-zA-Z0-9_]{1,180}", candidate):
+            reason = candidate
+    raise ValueError(reason)
 
 
 def smoke(request):
@@ -285,7 +299,8 @@ def smoke(request):
     need(request["role"] == "worker", "worker_required")
     host = json.loads(Path("/etc/symphony/host.json").read_text())
     output = run(["python3", "-I", "-B", host["package"] + "/tests/runtime_smoke.py", "--worker", host["user"],
-         "--image", host["image"], "--package", host["package"]], timeout=1200)
+         "--image", host["image"], "--package", host["package"],
+         "--windows-canary", str(STAGE / request["id"] / "windows_canary")], timeout=1200)
     report = {"isolation_smoke": "PASS", "execution_started": False, "image": host["image"],
               "package": host["package"], "checked_at": int(time.time()), "output": output[-131072:]}
     write(STAGE / request["id"] / "smoke-report.json", json.dumps(report).encode())

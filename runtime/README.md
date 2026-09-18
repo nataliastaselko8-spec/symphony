@@ -44,7 +44,11 @@ state/keys, сокеты Docker/Podman, SSH agent или GitHub-токен. `/us
 Контейнер работает как UID 10001, сопоставленный с произвольным UID worker host.
 10001 и внутренний SSH-порт 2222 — часть образа, а не параметры компьютера.
 Внешний task-порт выбирает Podman на loopback; management-порт задаёт локальный config.
-Ограничения: capabilities отключены, `no-new-privileges`, seccomp Podman,
+Ограничения: capabilities отключены, `no-new-privileges`, профиль seccomp Podman
+суженный до Unix/IPv4/IPv6/netlink sockets и только ABI
+x86_64. Host AF_VSOCK и совместимые ABI запрещены. Root supervisor создаёт профиль
+из системного deny-by-default профиля, сохраняет остальные ограничения и связывает
+его SHA256 с lease; изменение профиля закрывает gate. Далее действуют
 частные PID/IPC/mount/network namespaces, 2 CPU, 2 GiB, 512 процессов,
 256 MiB `/tmp`, 64 MiB временный home, 256 MiB на отдельный создаваемый файл.
 Task volume сохраняется; его общий размер этим лимитом не ограничен. Controller проверяет
@@ -191,10 +195,15 @@ controller SSH-ключа. Закрытая часть остаётся у contr
 
 ```bash
 sudo python3 -I -B "$PACKAGE/scripts/host-preflight.py" --worker "$WORKER_ACCOUNT" --image "$IMAGE_ID"
-sudo python3 -I -B "$PACKAGE/tests/runtime_smoke.py" --worker "$WORKER_ACCOUNT" --image "$IMAGE_ID" --package "$PACKAGE"
+sudo python3 -I -B "$PACKAGE/tests/runtime_smoke.py" --worker "$WORKER_ACCOUNT" --image "$IMAGE_ID" --package "$PACKAGE" --windows-canary "$WINDOWS_CANARY"
 ```
 
 Smoke использует фиктивный Git-репозиторий и публичный npm endpoint для проверки HTTPS.
+В WSL переменная `WINDOWS_CANARY` должна указывать на переданную через stdin копию
+системного Windows `cmd.exe`, размером до 2 MiB. Полный Windows Setup делает передачу
+автоматически; smoke не монтирует Windows ради этой проверки. На обычном Linux
+параметр можно опустить. Проверяются отказ запуска Windows PE, host-vsock и ELF32,
+при сохранении Unix/IPv4/IPv6 sockets.
 Он создаёт только свои временные units, контейнеры, SSH-ключи и cgroup rules; после подтверждённой
 остановки удаляет их. Реальные GitHub-токены, ChatGPT login и модельные запросы не используются.
 При неподтверждённой остановке workspace сохраняется. Не запускайте его как обычный preflight.
