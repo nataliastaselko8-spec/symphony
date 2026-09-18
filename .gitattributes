@@ -6,3 +6,5 @@ elixir/test/fixtures/status_dashboard_snapshots/* text eol=lf
 *.sh text eol=lf
 *.py text eol=lf
 runtime/** text eol=lf
+tools/wsl/** text eol=lf
+Symphony.cmd text eol=crlf

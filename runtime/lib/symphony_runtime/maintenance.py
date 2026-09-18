@@ -5,6 +5,7 @@ import subprocess
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 
 from .common import Rejected, atomic, canonical, command, identifier, locked, parse_json, private_dir, private_file, require
 from .controller import Controller
@@ -12,10 +13,21 @@ from . import models
 from .storage import collect
 
 
+@contextmanager
+def maintenance_window(ctl):
+    # recover stops a retained task and takes prepare.lock itself. Do not hold
+    # that lock recursively; re-check remote ownership after reacquiring it.
+    with locked(ctl.root / "launcher.lock"):
+        with locked(ctl.root / "prepare.lock"):
+            pass
+        ctl.recover()
+        with locked(ctl.root / "prepare.lock"):
+            yield ctl.ready()
+
+
 def cleanup(config, *, apply=False):
     ctl = Controller(config)
-    with locked(ctl.root / "launcher.lock"), locked(ctl.root / "prepare.lock"):
-        report = ctl.recover()
+    with maintenance_window(ctl) as report:
         require(report["phase"] in ("idle", "stopped", "exported") and "worker_ownership_unknown" not in report["reasons"], "cleanup_stop_unconfirmed")
         remote, _ = ctl.rpc({"action": "collect", "retention_days": config["retention_days"], "dry_run": not apply})
         local = collect(ctl.root, retention_days=config["retention_days"], dry_run=not apply, categories=("attempts",))
@@ -32,9 +44,8 @@ def select_model(config, model, effort):
 
 def login(config, *, discover=False):
     ctl = Controller(config)
-    with locked(ctl.root / "launcher.lock"), locked(ctl.root / "prepare.lock"):
-        require(discover or os.isatty(0), "interactive_terminal_required")
-        report = ctl.recover()
+    require(discover or os.isatty(0), "interactive_terminal_required")
+    with maintenance_window(ctl) as report:
         require(report["phase"] in ("idle", "stopped", "exported") and "worker_ownership_unknown" not in report["reasons"], "login_stop_unconfirmed")
         generation = "login-" + uuid.uuid4().hex
         directory = private_dir(ctl.root / "login", create=True)

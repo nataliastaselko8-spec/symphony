@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
-from symphony_runtime.common import Rejected, atomic, canonical, command, private_dir, read_json
+from symphony_runtime.common import Rejected, atomic, canonical, command, locked, private_dir, read_json
 from symphony_runtime.guardian import Guardian, PREFIX
 from symphony_runtime.controller import Controller
 from symphony_runtime import maintenance
@@ -85,7 +85,8 @@ class MaintenanceTest(unittest.TestCase):
             return {"generation": current["generation"], "phase": "running" if request["action"] == "start" else "stopped",
                     "port": 23456, "host_public_key": "ssh-ed25519 " + base64.b64encode(PREFIX + bytes(32)).decode()}, b""
         ctl = SimpleNamespace(root=self.root, manifest={"worker_image": "image"},
-                              recover=lambda: {"phase": "idle", "reasons": []}, rpc=rpc, ssh_config=Controller.ssh_config)
+                              recover=lambda: {"phase": "idle", "reasons": []},
+                              ready=lambda: {"phase": "idle", "reasons": []}, rpc=rpc, ssh_config=Controller.ssh_config)
         def run(argv, **kwargs):
             if argv[0] == "ssh-keygen":
                 return command(argv, **kwargs)
@@ -101,6 +102,32 @@ class MaintenanceTest(unittest.TestCase):
             self.assertEqual(maintenance.select_model({}, "fixture", "high")["selected"], {"model": "fixture", "effort": "high"})
         self.assertEqual(calls, ["login_prepare", "start", "stop"])
         self.assertTrue((self.root / "model-catalog.json").exists())
+
+    def test_maintenance_recovery_does_not_recursively_lock_prepare(self):
+        work = self.root / "unpublished"
+        work.write_text("preserve")
+        def recover():
+            with locked(self.root / "prepare.lock"):
+                with self.assertRaisesRegex(Rejected, "already_running"):
+                    with locked(self.root / "launcher.lock"): pass
+        ctl = SimpleNamespace(root=self.root, recover=recover, ready=lambda: {"phase": "stopped", "reasons": []})
+        with maintenance.maintenance_window(ctl) as report:
+            self.assertEqual(report["phase"], "stopped")
+            with self.assertRaisesRegex(Rejected, "already_running"):
+                with locked(self.root / "prepare.lock"): pass
+        self.assertEqual(work.read_text(), "preserve")
+        with locked(self.root / "prepare.lock"):
+            with self.assertRaisesRegex(Rejected, "already_running"):
+                with maintenance.maintenance_window(ctl): pass
+
+    def test_maintenance_refuses_remote_change_after_recovery(self):
+        ctl = SimpleNamespace(root=self.root, recover=lambda: None,
+                              ready=lambda: {"phase": "running", "reasons": ["worker_ownership_unknown"]})
+        with patch.object(maintenance, "Controller", return_value=ctl):
+            with self.assertRaisesRegex(Rejected, "cleanup_stop_unconfirmed"):
+                maintenance.cleanup({})
+            with self.assertRaisesRegex(Rejected, "login_stop_unconfirmed"):
+                maintenance.login({}, discover=True)
 
     def test_retirement_cannot_claim_foreign_generation_or_cancelled_cycle(self):
         value = self.guardian()

@@ -28,6 +28,8 @@ and credential-free Git bundle transfer. Machine paths and WSL accounts are conf
 outside the checkout. The controller connects the worker lifecycle and permits one selected pilot;
 inspection remains the default. Model and reasoning effort are selected locally and pinned per cycle.
 See the [execution guide](elixir/docs/github_projects_setup/pr13-runtime-guide.md).
+For a clean Windows/WSL2 installation, the [installer and operator commands](tools/wsl/README.md)
+provide Setup, Start, Stop and login using a local installation descriptor.
 
 ## Running Symphony
 

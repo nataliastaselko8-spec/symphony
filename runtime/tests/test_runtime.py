@@ -374,6 +374,43 @@ class RuntimeTest(unittest.TestCase):
                 process.terminate()
                 process.wait(timeout=5)
 
+    def test_lost_manager_pipe_requests_shutdown_and_preserves_work(self):
+        value = self.configured()
+        state = Path(value["state_root"])
+        retained = state / "unpublished-work"
+        retained.write_text("retain this")
+        executable = Path(value["symphony_root"]) / "elixir/bin/symphony"
+        executable.parent.mkdir(parents=True)
+        executable.write_text("#!" + sys.executable + "\nimport json,time\nfrom pathlib import Path\n"
+                              + "state=Path(" + repr(str(state)) + ")\n"
+                              + "while not (state/'shutdown.request').exists(): time.sleep(0.01)\n"
+                              + "(state/'shutdown.ack').write_text((state/'shutdown.request').read_text())\n")
+        executable.chmod(0o700)
+        program = ("import sys,json;sys.path.insert(0,sys.argv[1]);from symphony_runtime import cli;"
+                   "cli.preflight=lambda c,*args:{'controller_ready':True};"
+                   "cli.confirm_shutdown=lambda c:{'stopped':True,'workspace_preserved':True};"
+                   "raise SystemExit(cli.launch(json.loads(sys.argv[2]),execute=True,config_path='/fixture',supervised=True))")
+        process = subprocess.Popen([sys.executable, "-I", "-B", "-c", program,
+                                    str(Path(__file__).resolve().parents[1] / "lib"), json.dumps(value)], stdin=subprocess.PIPE)
+        try:
+            import time
+            process.stdin.write(b"ALIVE\n")
+            process.stdin.flush()
+            deadline = time.monotonic() + 5
+            while not (state / "launcher.json").exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(cli.status(value)["running"])
+            process.stdin.close()  # The Windows owner has disappeared.
+            self.assertEqual(process.wait(timeout=10), 0)
+            self.assertTrue(read_json(state / "last_shutdown.json")["stopped"])
+            self.assertTrue((state / "shutdown.request").exists())
+            self.assertFalse((state / "launcher.json").exists())
+            self.assertEqual(retained.read_text(), "retain this")
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=10)
+
 
 if __name__ == "__main__":
     unittest.main()

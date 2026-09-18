@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "controller": {
+    "distro": "YOUR_CONTROLLER_DISTRO",
+    "user": "your_linux_user",
+    "config": "/home/your_linux_user/.config/symphony/pilot/local.json",
+    "mise": "/home/your_linux_user/.local/bin/mise"
+  },
+  "worker": {
+    "distro": "YOUR_WORKER_DISTRO",
+    "config": "/etc/symphony/your-project.json"
+  },
+  "github_app": {
+    "app_id": "REPLACE",
+    "client_id": "REPLACE",
+    "installation_id": "REPLACE"
+  },
+  "pins": {
+    "symphony_commit": "REPLACE_WITH_40_CHARACTER_COMMIT",
+    "profile_revision": "REPLACE_WITH_40_CHARACTER_COMMIT",
+    "worker_image": "sha256:REPLACE_WITH_IMAGE_DIGEST"
+  },
+  "ssh": {
+    "identity": "/home/your_linux_user/.ssh/symphony_ed25519",
+    "known_hosts": "/home/your_linux_user/.ssh/symphony_known_hosts"
+  },
+  "runtime_config": {
+    "schema_version": 2,
+    "role": "controller",
+    "profile": "pilot",
+    "runtime_kind": "wsl2-podman",
+    "symphony_root": "/home/your_linux_user/symphony-pilot/symphony",
+    "project_template": "/home/your_linux_user/symphony-pilot/agent-runner/WORKFLOW.template.md",
+    "state_root": "/home/your_linux_user/.local/state/symphony/pilot",
+    "workflow": "/home/your_linux_user/.config/symphony/pilot/WORKFLOW.md",
+    "manifest": "/home/your_linux_user/.config/symphony/pilot/deployment.json",
+    "ssh_config": "/home/your_linux_user/.ssh/symphony_config",
+    "app_key": "/home/your_linux_user/.config/symphony/github-app/private-key.pem",
+    "operator_credential": "/home/your_linux_user/.config/symphony/operator/login-token",
+    "controller_distro": "YOUR_CONTROLLER_DISTRO",
+    "controller_user": "your_linux_user",
+    "worker_distro": "YOUR_WORKER_DISTRO",
+    "worker_user": "your_worker_user",
+    "worker_host": "symphony-worker",
+    "management_host": "symphony-management",
+    "dashboard_port": 4080,
+    "pilot_item_ids": [],
+    "retention_days": 7,
+    "disk_minimum_bytes": 5368709120,
+    "disk_warning_bytes": 10737418240
+  }
+}
