@@ -17,6 +17,12 @@ systemd с `DelegateSubgroup`, cgroup v2, rootless Podman 5.7+, pasta и
 iptables-nft/ip6tables-nft с `xt_cgroup`. Приёмка выполнена на systemd 259.5 и
 Podman 5.7.0. Другие версии требуют повторения smoke-теста.
 
+В WSL с раздельными systemd-поддеревьями runtime получает полный ControlGroup
+выделенной службы через systemd. Динамический ID дистрибутива не сохраняется в
+конфигурации. Firewall и guardian сверяют точную службу, inode и доступность
+контроллеров CPU/памяти/pids; общий ancestor не используется. Setup проверяет
+изоляцию при одновременно работающих controller и worker.
+
 ## Что видит агент
 
 ```text

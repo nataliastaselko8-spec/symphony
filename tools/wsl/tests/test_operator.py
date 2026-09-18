@@ -264,11 +264,15 @@ class OperatorTest(unittest.TestCase):
         state = {"supervisor": "inactive", "guardian": "active", "ssh": "active", "description": "marker"}
         def property(unit, name):
             if name == "Description": return state["description"]
+            if name == "ControlGroup": return evidence["cgroup"]
             return state[{"exact.service": "supervisor", "symphony-fixture.service": "guardian",
                           "symphony-fixture-management.service": "ssh"}[unit]]
         with patch.object(operator, "host_configuration", return_value=(host, "exact.service", "marker")), patch.object(operator, "policy_directory", return_value=directory), patch.object(operator, "root_path", side_effect=Path), patch.object(operator, "unit_property", side_effect=property):
             self.assertTrue(operator.host_info(self.data)["ready"])
             self.assertEqual(operator.host_info(self.data)["ownership"], "external")
+            evidence["cgroup"] = "/wsl-user/distro-287/systemd/system.slice/symphony-fixture.service"
+            (directory / "network.json").write_text(json.dumps(evidence))
+            self.assertTrue(operator.host_info(self.data)["ready"])
             state["ssh"] = "inactive"
             self.assertFalse(operator.host_info(self.data)["ready"])
             state["ssh"] = "active"

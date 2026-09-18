@@ -33,6 +33,7 @@ function New-WorkerKeeper {
     $keeper | Add-Member ScriptMethod Dispose {}
     return $keeper
 }
+function New-NativeProcess { return New-WorkerKeeper }
 function global:wsl.exe {
     $nativeArgs=@($args); $lines=@($input); $global:LASTEXITCODE=0
     if ($nativeArgs[-1] -eq '-') {

@@ -111,6 +111,7 @@ def host_info(data):
     host, unit, marker = host_configuration(data)
     sys.path.insert(0, str(Path(host["package"]) / "lib"))
     from symphony_runtime.config import package_digest
+    from symphony_runtime.cgroups import service_group
     policy = policy_directory(host) / "network.json"
     result = {"host": host, "ready": False, "ownership": "absent", "unit": unit,
               "runtime_sha256": package_digest(Path(host["package"]))}
@@ -118,10 +119,10 @@ def host_info(data):
         evidence = json.loads(root_path(policy).read_text())
         key = root_path(policy.parent / "management_host_key.pub").read_text().split()
         need(len(key) >= 2 and key[0] == "ssh-ed25519", "invalid_management_host_key")
-        need(evidence.get("image") == host["image"] and evidence.get("cgroup") ==
-             "/system.slice/symphony-" + host["name"] + ".service", "host_policy_scope_mismatch")
-        need(evidence.get("boot_id") == Path("/proc/sys/kernel/random/boot_id").read_text().strip(), "stale_host_boot")
         service = "symphony-" + host["name"]
+        actual = service_group(unit_property(service + ".service", "ControlGroup"), service + ".service")
+        need(evidence.get("image") == host["image"] and evidence.get("cgroup") == actual, "host_policy_scope_mismatch")
+        need(evidence.get("boot_id") == Path("/proc/sys/kernel/random/boot_id").read_text().strip(), "stale_host_boot")
         ready = (evidence.get("ready") is True and
                  evidence["valid_until_monotonic"] > time.clock_gettime(time.CLOCK_BOOTTIME) and
                  unit_property(service + ".service", "ActiveState") == "active" and

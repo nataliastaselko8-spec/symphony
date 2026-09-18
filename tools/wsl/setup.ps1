@@ -132,7 +132,10 @@ try {
         Invoke-Provision $state 'worker' 'worker' @{manifest=$manifest; public_key=$script:controllerInfo.public_key; port=$state.management_port} | Out-Null
     }
     Invoke-Stage $state 'isolation-smoke' {
-        $report = Invoke-Provision $state 'worker' 'smoke'
+        # Exercise both distro systemd trees together, as in normal operation.
+        $controllerKeeper = New-NativeProcess (Wsl-Path) @('-d',$state.distros.controller,'-u','symphony','--cd','/','--exec','python3','-I','-c','import sys;sys.stdin.buffer.read()') -Redirect
+        try { $report = Invoke-Provision $state 'worker' 'smoke' }
+        finally { $controllerKeeper.StandardInput.Close(); $controllerKeeper.Dispose() }
         if ($report.isolation_smoke -cne 'PASS') { throw 'Isolation smoke was not confirmed.' }
         Write-Json (Join-Path $state.home 'isolation-report.json') $report
     }

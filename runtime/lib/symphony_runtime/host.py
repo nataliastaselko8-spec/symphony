@@ -11,6 +11,7 @@ import time
 
 from .common import Rejected, lease_clock, no_links, read_json, require
 from .network import Firewall, host_addresses
+from .cgroups import service_group, resources
 
 
 def run(*args, allowed=(0,)):
@@ -42,11 +43,11 @@ class HostSession:
         require(self.root.is_relative_to(self.account.pw_dir) and self.root != Path(self.account.pw_dir), "worker_private_storage_required")
         require(self.root.is_dir() and self.root.stat().st_uid == self.account.pw_uid and self.root.stat().st_mode & 0o077 == 0, "worker_storage_permissions")
         self.unit = "symphony-" + name + ".service"
-        self.group = "system.slice/" + self.unit
+        self.group = None
         self.image = image
         self.policy_dir = Path("/run/symphony-runtime") / name
         self.policy = self.policy_dir / "network.json"
-        self.firewall = Firewall(self.group, ["1.1.1.1", "1.0.0.1"])
+        self.firewall = None
         self.installed = False
         self.started = False
         self.management = None
@@ -58,17 +59,26 @@ class HostSession:
         require(parent.stat().st_uid == 0 and parent.stat().st_mode & 0o022 == 0, "unsafe_policy_parent")
         self.policy_dir.mkdir(mode=0o755)
         try:
+            # systemd may live below a per-distro WSL subtree. Explicitly place
+            # the unit in its system.slice, then verify the real unit path.
+            parent = run("/usr/bin/systemctl", "show", "system.slice", "--property=ControlGroup", "--value")
+            self.group = service_group(parent + "/" + self.unit, self.unit).lstrip("/")
             run("/usr/bin/systemd-run", "--unit=" + self.unit, "--collect", "--service-type=exec",
+                "--slice=system.slice",
                 "--property=User=" + self.account.pw_name, "--property=Delegate=yes", "--property=DelegateSubgroup=supervisor",
                 "--property=KillMode=control-group", "--property=TimeoutStopSec=40", "--property=RuntimeMaxSec=12h",
                 "--setenv=HOME=" + self.account.pw_dir, "--setenv=XDG_RUNTIME_DIR=/run/user/" + str(self.account.pw_uid),
                 "/usr/bin/python3", "-I", str(self.package / "scripts/guardian.py"), "--root", str(self.root),
                 "--image", self.image, "--cgroup", "/" + self.group, "--policy", str(self.policy))
             self.started = True
+            actual = run("/usr/bin/systemctl", "show", self.unit, "--property=ControlGroup", "--value")
+            require(service_group(actual, self.unit) == "/" + self.group, "service_cgroup_changed")
             group = Path("/sys/fs/cgroup") / self.group
             deadline = time.monotonic() + 10
             while not group.exists() and time.monotonic() < deadline:
                 time.sleep(0.05)
+            self.cgroup_inode = resources(actual)
+            self.firewall = Firewall(self.group, ["1.1.1.1", "1.0.0.1"])
             self.addresses = host_addresses()
             self.firewall.install(self.addresses)
             self.installed = True
@@ -97,11 +107,14 @@ class HostSession:
     def refresh(self):
         # Changes to interfaces or externally removed rules close the gate; never silently repair them.
         require(host_addresses() == self.addresses, "host_network_changed_restart_required")
+        require(run("/usr/bin/systemctl", "show", self.unit, "--property=ControlGroup", "--value") == "/" + self.group,
+                "service_cgroup_changed")
+        require(resources("/" + self.group) == self.cgroup_inode, "service_cgroup_replaced")
         for family in (4, 6):
             self.firewall.rule(family, "-C", "OUTPUT", *self.firewall.jump())
         value = {"ready": True, "image": self.image, "cgroup": "/" + self.group,
                  "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
-                 "cgroup_inode": (Path("/sys/fs/cgroup") / self.group).stat().st_ino,
+                 "cgroup_inode": self.cgroup_inode,
                  "valid_until_monotonic": lease_clock() + 20}
         temporary = self.policy_dir / "network.pending"
         with temporary.open("w", encoding="utf-8") as stream:
@@ -166,8 +179,9 @@ ForceCommand /usr/bin/python3 -I -B {relay}
             run("/usr/bin/systemctl", "stop", self.management, allowed=(0, 5))
         if self.started:
             run("/usr/bin/systemctl", "stop", self.unit, allowed=(0, 5))
-        group = Path("/sys/fs/cgroup") / self.group
-        require(not group.exists() or not any(p.read_text().strip() for p in group.rglob("cgroup.procs")), "service_stop_unconfirmed_keep_firewall")
+        if self.group is not None:
+            group = Path("/sys/fs/cgroup") / self.group
+            require(not group.exists() or not any(p.read_text().strip() for p in group.rglob("cgroup.procs")), "service_stop_unconfirmed_keep_firewall")
         if self.installed:
             self.firewall.remove()
         # Explicit files only; no recursive delete of a configured path.

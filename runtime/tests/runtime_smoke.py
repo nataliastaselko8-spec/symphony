@@ -84,6 +84,7 @@ def main():
                        bundle_size=len(raw), bundle_sha256=digest(raw), ssh_public_key=public)
         stop_event = threading.Event()
         failures = []
+        host = None
         try:
             with HostSession(args.package, args.worker, args.image, root, "smoke-" + suffix) as host:
                 def maintain():
@@ -149,6 +150,11 @@ assert 'NoNewPrivs:\\t1' in status and 'Seccomp:\\t2' in status
 assert os.getuid() == 10001
 assert os.environ['CODEX_HOME'] == '/codex'
 assert resource.getrlimit(resource.RLIMIT_FSIZE) == (268435456, 268435456)
+cgroup = pathlib.Path('/sys/fs/cgroup')
+assert (cgroup / 'cpu.max').read_text().strip() == '200000 100000', 'cpu_limit_missing'
+assert (cgroup / 'memory.max').read_text().strip() == '2147483648', 'memory_limit_missing'
+assert (cgroup / 'pids.max').read_text().strip() == '512', 'pids_limit_missing'
+print('CPU_MEMORY_PIDS_LIMITS_PASS')
 probe = pathlib.Path('/workspace/fsize-probe')
 previous_signal = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
 try:
@@ -327,8 +333,8 @@ print('FILESYSTEM_BOUNDARY_PASS')
                 print((root / "last-command-error.log").read_text()[:16384], flush=True)
             # This exact mkdtemp path under the explicitly named worker home is the only deletion target.
             require(root.parent == Path(account.pw_dir) and root.name.startswith("smoke-"), "cleanup_path_mismatch")
-            group = Path("/sys/fs/cgroup/system.slice") / ("symphony-smoke-" + suffix + ".service")
-            if not group.exists():
+            group = Path("/sys/fs/cgroup") / host.group if host is not None and host.group is not None else None
+            if group is not None and not group.exists():
                 shutil.rmtree(root)
             else:
                 print("STOP_UNCONFIRMED_PRESERVING_WORKSPACE=" + str(root), flush=True)

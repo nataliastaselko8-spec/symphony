@@ -381,10 +381,12 @@ class RuntimeTest(unittest.TestCase):
         retained.write_text("retain this")
         executable = Path(value["symphony_root"]) / "elixir/bin/symphony"
         executable.parent.mkdir(parents=True)
-        executable.write_text("#!" + sys.executable + "\nimport json,time\nfrom pathlib import Path\n"
+        executable.write_text("#!" + sys.executable + "\nimport json,time,os\nfrom pathlib import Path\n"
                               + "state=Path(" + repr(str(state)) + ")\n"
                               + "while not (state/'shutdown.request').exists(): time.sleep(0.01)\n"
-                              + "(state/'shutdown.ack').write_text((state/'shutdown.request').read_text())\n")
+                              + "fd=os.open(state/'shutdown.pending',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n"
+                              + "with os.fdopen(fd,'wb') as stream: stream.write((state/'shutdown.request').read_bytes())\n"
+                              + "os.replace(state/'shutdown.pending',state/'shutdown.ack')\n")
         executable.chmod(0o700)
         program = ("import sys,json;sys.path.insert(0,sys.argv[1]);from symphony_runtime import cli;"
                    "cli.preflight=lambda c,*args:{'controller_ready':True};"

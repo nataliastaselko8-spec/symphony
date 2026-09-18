@@ -14,6 +14,7 @@ import uuid
 from .common import Rejected, atomic, canonical, command, digest, identifier, lease_clock, locked, no_links, parse_json, private_dir, private_file, read_json, require, sha
 from .storage import capacity, collect, retire
 from .images import collect_images, register
+from .cgroups import service_group, current_group, resources
 
 MAX_BUNDLE = 80 * 1024 * 1024
 MAX_HEADER = 16384
@@ -65,8 +66,8 @@ class Guardian:
     def __init__(self, root, image, cgroup, policy_file, *, podman="/usr/bin/podman", clock=lease_clock):
         require(os.geteuid() != 0, "guardian_must_be_unprivileged")
         require(re.fullmatch(r"sha256:[0-9a-f]{64}", image), "image_digest_required")
-        require(re.fullmatch(r"/system.slice/symphony-[a-zA-Z0-9_-]+\.service", cgroup), "dedicated_service_required")
-        current = Path("/proc/self/cgroup").read_text().strip().split("::", 1)[1]
+        service_group(cgroup)
+        current = current_group()
         require(current == cgroup + "/supervisor", "guardian_cgroup_mismatch")
         self.root = private_dir(root)
         require(":" not in str(self.root), "mount_path_contains_separator")
@@ -93,6 +94,7 @@ class Guardian:
         require(policy.get("cgroup") == self.cgroup and policy.get("boot_id") == Path("/proc/sys/kernel/random/boot_id").read_text().strip(), "network_policy_scope_mismatch")
         require(policy.get("image") == self.image and policy.get("ready") is True, "network_policy_not_ready")
         require(policy.get("cgroup_inode") == (Path("/sys/fs/cgroup") / self.cgroup.lstrip("/")).stat().st_ino, "network_policy_stale")
+        resources(self.cgroup)
         require(type(policy.get("valid_until_monotonic")) in (int, float) and self.clock() < policy["valid_until_monotonic"], "network_policy_expired")
 
     def save(self):
