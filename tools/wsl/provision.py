@@ -211,14 +211,7 @@ def controller(request):
     for version in manifest["toolchain"].values():
         need(re.fullmatch(r"[0-9][0-9A-Za-z.+-]{1,50}", version), "invalid_toolchain")
     tools = [name + "@" + manifest["toolchain"][name] for name in ("erlang", "elixir")]
-    cwd = home / "symphony/elixir"
-    environment = {"MISE_YES": "1", "MISE_TRUSTED_CONFIG_PATHS": str(cwd),
-                   "KERL_CONFIGURE_OPTIONS": "--without-javac --without-wx"}
-    run([str(mise), "install", *tools], user=user, cwd=cwd, env=environment, timeout=3600)
-    run([str(mise), "exec", *tools, "--", "mix", "local.hex", "--force"], user=user, cwd=cwd, env=environment)
-    run([str(mise), "exec", *tools, "--", "mix", "local.rebar", "--force"], user=user, cwd=cwd, env=environment)
-    for action in ("setup", "build"):
-        run([str(mise), "exec", *tools, "--", "mix", action], user=user, cwd=cwd, env=environment, timeout=1800)
+    build_controller(stage, home, user, mise, manifest, tools)
     ssh = home / ".ssh"
     run(["install", "-d", "-m", "700", str(ssh)], user=user)
     key = ssh / "management_ed25519"
@@ -226,6 +219,53 @@ def controller(request):
         run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], user=user)
     pub = " ".join(key.with_suffix(".pub").read_text().split()[:2])
     return {"controller_ready": True, "public_key": pub, "home": str(home)}
+
+
+def controller_artifact(path, user):
+    need(not any(p.is_symlink() for p in (path, *path.parents)), "unsafe_controller_artifact")
+    need(path.is_file(), "controller_artifact_missing")
+    info = path.stat()
+    need(info.st_nlink == 1 and info.st_uid == pwd.getpwnam(user).pw_uid and
+         info.st_mode & 0o111 and not info.st_mode & 0o022 and
+         0 < info.st_size <= 256 * 1024**2, "unsafe_controller_artifact")
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def build_controller(stage, home, user, mise, manifest, tools):
+    """Retain accepted build bytes across Setup retries; never silently repin them."""
+    cwd = home / "symphony/elixir"
+    artifact = cwd / "bin/symphony"
+    receipt = stage / "controller-build.json"
+    need(not any(p.is_symlink() for p in (receipt, *receipt.parents)), "unsafe_controller_build_receipt")
+    inputs = {"schema_version": 1, "symphony_commit": manifest["symphony_commit"],
+              "toolchain": manifest["toolchain"], "mise_sha256": hashlib.sha256(mise.read_bytes()).hexdigest()}
+    if receipt.exists():
+        info = receipt.stat()
+        need(receipt.is_file() and info.st_nlink == 1 and info.st_uid == os.geteuid() and
+             info.st_mode & 0o777 == 0o600 and info.st_size <= 4096, "unsafe_controller_build_receipt")
+        try:
+            saved = json.loads(receipt.read_text())
+        except (ValueError, UnicodeError):
+            raise ValueError("invalid_controller_build_receipt") from None
+        need(isinstance(saved, dict) and set(saved) == set(inputs) | {"artifact_sha256"} and
+             all(saved.get(key) == value for key, value in inputs.items()), "controller_build_inputs_changed")
+        need(saved["artifact_sha256"] == controller_artifact(artifact, user), "controller_artifact_changed")
+        return
+    # A deployment manifest binds the exact executable. Losing its build receipt
+    # must not trigger a rebuild, even if the source revision is unchanged.
+    deployment = home / ".config/symphony/pilot/deployment.json"
+    need(not deployment.exists() and not deployment.is_symlink(),
+         "controller_build_receipt_missing_for_existing_manifest")
+    environment = {"MISE_YES": "1", "MISE_TRUSTED_CONFIG_PATHS": str(cwd),
+                   "KERL_CONFIGURE_OPTIONS": "--without-javac --without-wx"}
+    run([str(mise), "install", *tools], user=user, cwd=cwd, env=environment, timeout=3600)
+    run([str(mise), "exec", *tools, "--", "mix", "local.hex", "--force"], user=user, cwd=cwd, env=environment)
+    run([str(mise), "exec", *tools, "--", "mix", "local.rebar", "--force"], user=user, cwd=cwd, env=environment)
+    for action in ("setup", "build"):
+        run([str(mise), "exec", *tools, "--", "mix", action], user=user, cwd=cwd, env=environment, timeout=1800)
+    value = {**inputs, "artifact_sha256": controller_artifact(artifact, user)}
+    write(receipt, json.dumps(value, sort_keys=True).encode(), immutable=True)
 
 
 def extract_runtime(archive, destination):

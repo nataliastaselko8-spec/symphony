@@ -143,6 +143,120 @@ class ProvisionTests(unittest.TestCase):
                 p.clone(bundle, dest, commit, "fixture")
         self.assertEqual((dest / "code").read_text(), "unpublished")
 
+    def controller_fixture(self):
+        home = self.root / 'controller-home'
+        (home / 'symphony/elixir/bin').mkdir(parents=True)
+        (home / '.ssh').mkdir()
+        (home / '.ssh/management_ed25519').write_text('existing SSH key')
+        (home / '.ssh/management_ed25519.pub').write_text('ssh-ed25519 fixture')
+        stage = p.STAGE / self.request['id']
+        stage.mkdir(parents=True)
+        (stage / 'mise').write_bytes(b'fixed mise')
+        account = types.SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid(), pw_dir=str(home))
+        patch.object(p, 'owned', return_value='fixture').start()
+        patch.object(p.pwd, 'getpwnam', return_value=account).start()
+        patch.object(p, 'clone').start()
+        request = {**self.request, 'manifest': {'symphony_commit': 'a' * 40, 'profile_revision': 'b' * 40,
+                   'toolchain': {'erlang': '28.5', 'elixir': '1.19.5-otp-28'}}}
+        artifact = home / 'symphony/elixir/bin/symphony'
+        builds = []
+        def execute(argv, **_):
+            if argv[-2:] == ['mix', 'build']:
+                builds.append(len(builds) + 1)
+                artifact.write_bytes(('escript archive build ' + str(builds[-1])).encode())
+                artifact.chmod(0o755)
+            return ''
+        runner = patch.object(p, 'run', side_effect=execute).start()
+        return request, home, stage, artifact, builds, runner
+
+    def test_resumed_controller_keeps_manifest_bound_build_bytes(self):
+        request, home, stage, artifact, builds, runner = self.controller_fixture()
+        p.controller(request)
+        original = artifact.read_bytes()
+        receipt = stage / 'controller-build.json'
+        accepted = receipt.read_bytes()
+        deployment = home / '.config/symphony/pilot/deployment.json'
+        deployment.parent.mkdir(parents=True)
+        deployment.write_text(json.dumps({'artifact_sha256': hashlib.sha256(original).hexdigest()}))
+        runner.reset_mock()
+        p.controller(request)
+        p.controller(request)
+        self.assertEqual(builds, [1])
+        self.assertEqual(artifact.read_bytes(), original)
+        self.assertEqual(receipt.read_bytes(), accepted)
+        self.assertEqual(json.loads(deployment.read_text())['artifact_sha256'], hashlib.sha256(artifact.read_bytes()).hexdigest())
+        self.assertFalse(any(str(call.args[0][0]).endswith('/mise') for call in runner.call_args_list))
+
+    def test_controller_does_not_rebuild_changed_or_missing_accepted_artifact(self):
+        request, _, stage, artifact, builds, runner = self.controller_fixture()
+        p.controller(request)
+        receipt = (stage / 'controller-build.json').read_bytes()
+        artifact.write_bytes(b'changed executable')
+        with self.assertRaisesRegex(ValueError, 'controller_artifact_changed'):
+            p.controller(request)
+        self.assertEqual(artifact.read_bytes(), b'changed executable')
+        artifact.unlink()
+        with self.assertRaisesRegex(ValueError, 'controller_artifact_missing'):
+            p.controller(request)
+        self.assertEqual(builds, [1])
+        self.assertEqual((stage / 'controller-build.json').read_bytes(), receipt)
+
+    def test_controller_does_not_rebuild_when_receipt_is_lost_after_configuration(self):
+        request, home, stage, artifact, builds, _ = self.controller_fixture()
+        p.controller(request)
+        (stage / 'controller-build.json').unlink()
+        deployment = home / '.config/symphony/pilot/deployment.json'
+        deployment.parent.mkdir(parents=True)
+        deployment.write_text('retained manifest')
+        original = artifact.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'controller_build_receipt_missing'):
+            p.controller(request)
+        self.assertEqual(builds, [1])
+        self.assertEqual(artifact.read_bytes(), original)
+        self.assertEqual(deployment.read_text(), 'retained manifest')
+
+    def test_controller_rejects_changed_build_inputs_and_unsafe_receipt(self):
+        request, home, stage, artifact, builds, _ = self.controller_fixture()
+        p.controller(request)
+        request['manifest']['toolchain']['erlang'] = '28.6'
+        with self.assertRaisesRegex(ValueError, 'controller_build_inputs_changed'):
+            p.controller(request)
+        request['manifest']['toolchain']['erlang'] = '28.5'
+        receipt = stage / 'controller-build.json'
+        original = receipt.read_bytes()
+        receipt.write_text('{invalid')
+        with self.assertRaisesRegex(ValueError, 'invalid_controller_build_receipt'):
+            p.controller(request)
+        receipt.write_bytes(original)
+        receipt.chmod(0o666)
+        with self.assertRaisesRegex(ValueError, 'unsafe_controller_build_receipt'):
+            p.controller(request)
+        receipt.chmod(0o600)
+        saved = home / 'saved-receipt'
+        receipt.rename(saved)
+        receipt.symlink_to(saved)
+        with self.assertRaisesRegex(ValueError, 'unsafe_controller_build_receipt'):
+            p.controller(request)
+        self.assertEqual(builds, [1])
+
+    def test_interrupted_first_build_resumes_before_any_manifest_is_accepted(self):
+        request, _, stage, artifact, builds, runner = self.controller_fixture()
+        execute = runner.side_effect
+        def interrupted(argv, **kwargs):
+            value = execute(argv, **kwargs)
+            if argv[-2:] == ['mix', 'build']:
+                raise ValueError('simulated interruption')
+            return value
+        runner.side_effect = interrupted
+        with self.assertRaisesRegex(ValueError, 'simulated interruption'):
+            p.controller(request)
+        self.assertFalse((stage / 'controller-build.json').exists())
+        runner.side_effect = execute
+        p.controller(request)
+        self.assertEqual(builds, [1, 2])
+        saved = json.loads((stage / 'controller-build.json').read_text())
+        self.assertEqual(saved['artifact_sha256'], hashlib.sha256(artifact.read_bytes()).hexdigest())
+
 
 if __name__ == "__main__":
     unittest.main()
