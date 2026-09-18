@@ -246,6 +246,30 @@ function Get-Manager($Installation) {
     return $record
 }
 
+function Test-DashboardReady([int]$Port) {
+    if ($Port -lt 1024 -or $Port -gt 65535) { throw 'Invalid dashboard port.' }
+    # WSL publishes this listener on IPv4. Windows PowerShell 5.1 can spend the
+    # entire probe timeout trying ::1 first when the URL contains localhost.
+    # Keep the configured origin in Host for the operator authentication check.
+    $request = [Net.HttpWebRequest]::Create(('http://127.0.0.1:' + $Port + '/operator/login'))
+    $request.Host = 'localhost:' + $Port
+    $request.Proxy = $null
+    $request.AllowAutoRedirect = $false
+    $request.Timeout = 2000
+    $request.ReadWriteTimeout = 2000
+    $response = $null
+    try {
+        $response = $request.GetResponse()
+        return ([int]$response.StatusCode -eq 200)
+    } catch [Net.WebException] {
+        if ($null -ne $_.Exception.Response) { $_.Exception.Response.Close() }
+        return $false
+    } finally {
+        if ($null -ne $response) { $response.Close() }
+        $request.Abort()
+    }
+}
+
 function Start-LogDrain($Process, [string]$Directory) {
     if (-not ('SymphonyBoundedLogs' -as [type])) {
         Add-Type -TypeDefinition @'

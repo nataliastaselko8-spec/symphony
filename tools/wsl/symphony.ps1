@@ -27,6 +27,7 @@ $manager = Get-Manager $data
 $recordPath = Join-Path $data.install_home 'manager.json'
 $url = 'http://localhost:' + $data.runtime_config.dashboard_port
 if ($Action -in @('Start','Open')) {
+    $startedManager = $null
     if ($state.stage -ne 'complete') { throw ('Finish Setup first. Last stage: ' + $state.stage) }
     if ($Action -eq 'Open' -and $null -eq $manager) { throw 'Dashboard is stopped. Use Symphony.cmd Start.' }
     if ($Action -eq 'Start' -and $null -eq $manager) {
@@ -36,14 +37,18 @@ if ($Action -in @('Start','Open')) {
         $file = Join-Path $data.install_home 'installer/manager.ps1'
         $powershell = Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
         $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$file,'-Installation',$Installation)
-        Start-Process -FilePath $powershell -ArgumentList (@($arguments | ForEach-Object { Quote-NativeArgument $_ }) -join ' ') -WindowStyle Hidden | Out-Null
+        Write-Host 'Starting Symphony; waiting for the local dashboard...'
+        $startedManager = Start-Process -FilePath $powershell -ArgumentList (@($arguments | ForEach-Object { Quote-NativeArgument $_ }) -join ' ') -WindowStyle Hidden -PassThru
     }
     $deadline = [DateTime]::UtcNow.AddSeconds(100)
     do {
         $manager = Get-Manager $data
         if ($null -ne $manager -and $manager.phase -eq 'ready') { Start-Process -FilePath $url; Write-Host $url; return }
         if ($null -ne $manager -and $manager.phase -eq 'attention-required') { throw 'Startup requires attention. Run Symphony.cmd Doctor.' }
-        if ($null -eq $manager -and (Test-Path -LiteralPath $recordPath) -and (Read-Json $recordPath).phase -eq 'attention-required') { throw 'Startup failed. Run Symphony.cmd Doctor to inspect the saved reason.' }
+        # The previous failure record remains until the new process takes the
+        # installation lock and writes its identity. Do not report it as a new failure.
+        if ($null -eq $manager -and ($null -eq $startedManager -or $startedManager.HasExited) -and
+            (Test-Path -LiteralPath $recordPath) -and (Read-Json $recordPath).phase -eq 'attention-required') { throw 'Startup failed. Run Symphony.cmd Doctor to inspect the saved reason.' }
         Start-Sleep -Milliseconds 500
     } while ([DateTime]::UtcNow -lt $deadline)
     throw 'Dashboard readiness was not confirmed. Run Symphony.cmd Doctor.'

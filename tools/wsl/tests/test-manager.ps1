@@ -53,7 +53,17 @@ function Invoke-Native {
     }
     throw 'unexpected_fixture_native_command'
 }
-function Invoke-WebRequest { param([switch]$UseBasicParsing,$Uri,$TimeoutSec); return [pscustomobject]@{StatusCode=200} }
+function Test-DashboardReady { param([int]$Port); return $true }
+function Start-Process {
+    param($FilePath,$ArgumentList,$WindowStyle,[switch]$PassThru)
+    if ($FilePath -like 'http://localhost:*') {
+        [IO.File]::WriteAllText((Join-Path $script:fixtureRoot 'browser-opened'),$FilePath)
+        return
+    }
+    Microsoft.PowerShell.Management\Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -WindowStyle $WindowStyle -PassThru:$PassThru
+}
+# Leave the old failure record visible while the new manager is starting.
+if ([IO.Path]::GetFileName($MyInvocation.ScriptName) -eq 'manager.ps1') { Start-Sleep -Seconds 2 }
 '@
     [IO.File]::AppendAllText((Join-Path $installer 'support.ps1'),$fake)
     $id=[Guid]::NewGuid().ToString('N')
@@ -61,11 +71,15 @@ function Invoke-WebRequest { param([switch]$UseBasicParsing,$Uri,$TimeoutSec); r
     $descriptor=Join-Path $root 'installation.json'; Write-Json $descriptor $data
     $helpers=@{}
     foreach ($name in $names) { $helpers[$name]=(Get-FileHash -LiteralPath (Join-Path $installer $name) -Algorithm SHA256).Hash.ToLowerInvariant() }
-    Write-Json (Join-Path $root 'setup.json') @{id=$id; home=$root; helpers=$helpers}
+    Write-Json (Join-Path $root 'setup.json') @{id=$id; home=$root; helpers=$helpers; stage='complete'}
     $shell=Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
-    $argsList=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $installer 'manager.ps1'),'-Installation',$descriptor)
-    $manager=Start-Process -FilePath $shell -ArgumentList (@($argsList | ForEach-Object { Quote-NativeArgument $_ }) -join ' ') -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $root 'manager-error.txt')
     $recordPath=Join-Path $root 'manager.json'
+    Write-Json $recordPath @{installation_id=$id; pid=$PID; start='0'; token='previous'; phase='attention-required'; stopped=$true; reason='dashboard_start_timeout'}
+    $argsList=@('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $installer 'symphony.ps1'),'Start','-Installation',$descriptor)
+    Invoke-Native $shell $argsList -TimeoutSeconds 20 | Out-Null
+    Assert (Test-Path -LiteralPath (Join-Path $root 'browser-opened')) 'Start did not wait for the new manager after a saved failure'
+    $record=Read-Json $recordPath
+    $manager=Get-Process -Id $record.pid
     $deadline=[DateTime]::UtcNow.AddSeconds(15)
     do {
         Start-Sleep -Milliseconds 100
@@ -73,7 +87,7 @@ function Invoke-WebRequest { param([switch]$UseBasicParsing,$Uri,$TimeoutSec); r
     } while (-not $manager.HasExited -and [DateTime]::UtcNow -lt $deadline)
     if ($manager.HasExited) {
         $details = $(if (Test-Path -LiteralPath $recordPath) { [IO.File]::ReadAllText($recordPath) } else { 'no record' })
-        throw ('Manager exited before readiness: ' + $details + [IO.File]::ReadAllText((Join-Path $root 'manager-error.txt')))
+        throw ('Manager exited before readiness: ' + $details)
     }
     Assert ($record.phase -eq 'ready') ('Manager not ready: '+($record | ConvertTo-Json -Compress))
     $identity=Get-Manager ([pscustomobject]$data)
@@ -91,7 +105,7 @@ function Invoke-WebRequest { param([switch]$UseBasicParsing,$Uri,$TimeoutSec); r
     while (-not (Test-Path -LiteralPath (Join-Path $root 'worker.exited')) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
     Assert (Test-Path -LiteralPath (Join-Path $root 'worker.exited')) 'Worker keepalive survived stop'
     Assert ($null -eq (Get-Manager ([pscustomobject]$data))) 'Dead manager still reported live'
-    Write-Host 'PASS hidden manager readiness, retained child processes, stale stop rejection and confirmed shutdown'
+    Write-Host 'PASS Start after saved failure, hidden manager readiness, retained child processes, stale stop rejection and confirmed shutdown'
 } finally {
     if ($null -ne $manager) { if (-not $manager.HasExited) { $manager.Kill(); $manager.WaitForExit() }; $manager.Dispose() }
     foreach ($role in @('worker','controller')) {

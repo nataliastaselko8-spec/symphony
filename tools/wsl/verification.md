@@ -41,6 +41,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/wsl/tests/test-com
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/wsl/tests/test-installer.ps1 -WslDistro YOUR_TEST_DISTRO
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/wsl/tests/test-setup.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/wsl/tests/test-manager.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/wsl/tests/test-dashboard.ps1
 ```
 
 Тесты не меняют пакеты, пользователей или службы существующих Ubuntu.
@@ -211,6 +212,35 @@ mise/mix не было. Полный интерактивный Setup новог
 По явному запросу владелицы установка, остановившаяся на этой ошибке, удалена.
 До удаления подтверждены idle, отсутствие рабочих копий, экспортов и Codex auth;
 штатная остановка supervisor подтверждена. Остальные WSL-среды сохранены.
+
+### Таймаут готовности Windows Start 2026-09-18
+
+Полный Setup завершился: реальный вход Codex, каталог моделей и выбор effort
+сохранены. При Start controller и дашборд запустились, но Windows manager не
+подтвердил готовность. В PowerShell 5.1 обращение к localhost занимало около
+2,18 секунды из-за неработающего IPv6 loopback, превышая таймаут пробы в 2 секунды.
+Запрос по IPv4 с исходным Host проходил за 1–25 мс. Прямая замена URL на IP без
+Host не подходит: проверка origin оператора правильно возвращает 403.
+
+Проверка теперь использует IPv4 loopback, сохранённый Host, отключённый для этой
+пробы прокси, ограниченные таймауты и не следует перенаправлениям. Отдельно
+исправлено чтение старого attention-required до записи состояния нового manager;
+Start показывает, что ожидает дашборд.
+
+Проверены настоящие HTTP-соединения PowerShell 5.1 с IPv4-only fixture: 200,
+перенаправление, 503, таймаут и обход тестового прокси. Процессный тест воспроизводит
+старую ошибку при задержке нового manager и подтверждает Start/Stop, удержание
+дочерних процессов и отказ устаревшей команды Stop. Также прошли 19 сценариев
+operator и wizard interruption/resume. 10 native transport/installer сценариев
+прошли с явно заданным `[Console]::InputEncoding = New-Object Text.UTF8Encoding($false)`:
+без этого окружение тестового запуска добавляло BOM в бинарный stdin. Этот
+отдельный вопрос кодировки не меняет реализацию HTTP-проверки.
+
+У существующей завершённой установки Windows helpers можно исправить отдельно
+от Linux runtime: только после подтверждённой остановки и сверки старых hashes,
+с резервными копиями, записью ревизии исправления и новых hashes. Pins runtime,
+образ, авторизация и descriptor при этом не меняются. Это адресное исправление
+пилота, не реализация общего механизма обновления установок.
 
 ### Приёмка после исправлений
 

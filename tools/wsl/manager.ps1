@@ -37,8 +37,7 @@ try {
         }
         if ($record.phase -eq 'starting') {
             try {
-                $response = Invoke-WebRequest -UseBasicParsing -Uri ('http://localhost:' + $data.runtime_config.dashboard_port + '/operator/login') -TimeoutSec 2
-                if ($response.StatusCode -eq 200 -and -not $controller.HasExited) {
+                if ((Test-DashboardReady $data.runtime_config.dashboard_port) -and -not $controller.HasExited) {
                     $record.phase = 'ready'
                     Write-Json $recordPath $record
                 }
