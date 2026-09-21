@@ -164,6 +164,7 @@ defmodule SymphonyElixir.Operator.View do
   def message(:operator_reason_required), do: "Добавьте комментарий о проверке или причине решения."
   def message(:invalid_operator_decision), do: "Проверьте заполнение формы. Для Queue нужны оба ресурса, обе галочки и комментарий."
   def message(:ready_allowed_item_required), do: "Нужна разрешённая карточка Ready for agent в текущем Project."
+  def message(:owned_allowed_item_required), do: "Для продолжения нужна та же открытая карточка с Agent allowed=yes в статусе Ready for agent или Agent working."
   def message(:positive_budget_required), do: "Укажите положительное добавление бюджета. Для recovery нужны время работы и CI."
   def message(:close_pr_or_validate_merged_dev), do: "Закройте ненужный PR в GitHub; после merge требуется проверка dev."
   def message(:environment_not_ready), do: "Среда ещё не готова. Проверьте deployment, Scheduler и Cloudflare Queue."

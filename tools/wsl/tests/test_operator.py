@@ -40,7 +40,7 @@ class OperatorTest(unittest.TestCase):
         (self.source / "elixir/bin/symphony").chmod(0o700)
         project = private_dir(self.root / "profile", create=True)
         template = project / "WORKFLOW.template.md"
-        template.write_text('---\n{"tracker":{"kind":"github_projects","item_ids":"${runtime.pilot_item_ids}"}}\n---\nPrompt.\n')
+        template.write_text('---\n{"tracker":{"kind":"github_projects","provider":{"repo":"ExampleOrg/app","states":{"ready":"Ready for agent"},"item_ids":"${runtime.pilot_item_ids}"}}}\n---\nPrompt.\n')
         ssh = private_dir(self.root / "ssh", create=True)
         credential = private_dir(self.root / "credentials", create=True)
         atomic(credential / "app.pem", b"fixture app key")
@@ -193,6 +193,131 @@ class OperatorTest(unittest.TestCase):
         with patch.object(maintenance, "select_model", return_value={}) as select:
             self.action("select-model", model="explicit-model", effort="high")
             self.assertEqual(select.call_args.args[1:], ("explicit-model", "high"))
+
+    def pilot_fixture(self):
+        self.setup()
+        (self.root / "erlang/bin").mkdir(parents=True)
+        (self.root / "erlang/bin/escript").touch()
+        state = Path(self.config["state_root"])
+        atomic(state / "model-selection.json", json.dumps({"model": "test-model", "effort": "high"}).encode())
+        atomic(state / "model-catalog.json", json.dumps({"image": self.data["pins"]["worker_image"], "queried_at": int(time.time()),
+                                                       "models": [{"model": "test-model", "efforts": ["high"]}]}).encode())
+        self.report = {"project": {"repo": "ExampleOrg/app"}, "schema": {"agent_allowed_option_id": "yes-id"}, "items": [{
+            "item_id": "PVTI_test", "archived": False, "issue_state": "OPEN", "state": "Ready for agent",
+            "url": "https://github.com/ExampleOrg/app/issues/132", "reasons": ["outside_item_scope"],
+            "native_ref": {"repo": "ExampleOrg/app", "issue_number": 132, "agent_allowed_option_id": "yes-id"}}]}
+        # The existing finite inspect command is used, no worker or project write.
+        return self.report
+
+    def select_fixture(self):
+        def fake_run(args, **kwargs):
+            return str(self.root / "erlang") if "where" in args else json.dumps(self.report)
+        with patch.dict(os.environ), patch.object(operator, "pilot_source_idle"), patch.object(operator, "run", side_effect=fake_run):
+            return self.action("select-pilot", issue=132)
+
+    def test_pilot_selection_preserves_old_profile_keys_store_and_uses_one_new_scope(self):
+        self.pilot_fixture()
+        old_state = Path(self.config["state_root"])
+        atomic(old_state / "delivery.json", b"retained old journal")
+        before = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file()}
+        result = self.select_fixture()
+        self.assertFalse(result["execution_started"])
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        updated = result["installation"]
+        cfg = config.load(updated["controller"]["config"])
+        self.assertNotEqual(cfg["state_root"], self.config["state_root"])
+        self.assertEqual(cfg["pilot_item_ids"], ["PVTI_test"])
+        self.assertEqual(config.workflow_settings(cfg)["tracker"]["provider"]["item_ids"], ["PVTI_test"])
+        self.assertEqual(config.validate_manifest(cfg)["symphony_commit"], self.data["pins"]["symphony_commit"])
+        self.assertFalse((Path(cfg["state_root"]) / "delivery.json").exists())
+        for key in ("app_key", "operator_credential", "ssh_config"):
+            self.assertEqual(cfg[key], self.config[key])
+        for name in ("model-selection.json", "model-catalog.json"):
+            self.assertEqual((Path(cfg["state_root"]) / name).read_bytes(), (old_state / name).read_bytes())
+
+    def test_selection_can_resume_before_descriptor_commit_without_repinning(self):
+        self.pilot_fixture()
+        original = self.select_fixture()
+        self.assertEqual(original, self.select_fixture())
+        self.data = original["installation"]
+        with patch.object(operator, "run") as run:
+            self.assertEqual(self.action("select-pilot", issue=132), original)
+            run.assert_not_called()
+        with self.assertRaisesRegex(operator.Refused, "pilot_already_selected"):
+            self.action("select-pilot", issue=133)
+
+    def test_selection_resume_does_not_erase_started_pilot_or_model_change(self):
+        self.pilot_fixture()
+        selected = self.select_fixture()["installation"]
+        state = Path(selected["runtime_config"]["state_root"])
+        atomic(state / "delivery.json", b"unpublished work must survive")
+        with self.assertRaisesRegex(operator.Refused, "prepared_pilot_already_used"):
+            self.select_fixture()
+        self.assertEqual((state / "delivery.json").read_bytes(), b"unpublished work must survive")
+
+    def test_interrupted_selection_resumes_without_changing_the_source(self):
+        self.pilot_fixture()
+        before = self.file.read_bytes()
+        with patch.object(config, "pin", side_effect=OSError("interrupted before manifest")), self.assertRaises(OSError):
+            self.select_fixture()
+        self.assertEqual(self.file.read_bytes(), before)
+        result = self.select_fixture()
+        cfg = config.load(result["installation"]["controller"]["config"])
+        config.validate_manifest(cfg)
+
+    def test_prepared_profile_with_changed_bytes_is_not_adopted(self):
+        self.pilot_fixture()
+        selected = self.select_fixture()["installation"]
+        cfg = selected["runtime_config"]
+        original = Path(cfg["workflow"]).read_bytes()
+        atomic(cfg["workflow"], original + b"unapproved change")
+        with self.assertRaisesRegex(Rejected, "workflow_changed"):
+            self.select_fixture()
+        self.assertTrue(Path(cfg["workflow"]).read_bytes().endswith(b"unapproved change"))
+
+    def test_selection_refuses_denied_closed_wrong_status_duplicate_and_missing_cards(self):
+        self.pilot_fixture()
+        original = copy.deepcopy(self.report)
+        for change in ("denied", "closed", "status", "duplicate", "missing", "labels", "repository"):
+            self.report = copy.deepcopy(original)
+            row = self.report["items"][0]
+            if change == "denied": row["native_ref"]["agent_allowed_option_id"] = "no-id"
+            if change == "closed": row["issue_state"] = "CLOSED"
+            if change == "status": row["state"] = "Backlog"
+            if change == "duplicate": self.report["items"].append(copy.deepcopy(row))
+            if change == "missing": self.report["items"] = []
+            if change == "labels": row["reasons"].append("missing_required_label")
+            if change == "repository": self.report["project"]["repo"] = "Other/app"
+            with self.subTest(change=change), self.assertRaises(operator.Refused):
+                self.select_fixture()
+        self.assertEqual(list(self.file.parent.glob("pilot-*")), [])
+
+    def test_selection_refuses_busy_source_recovery_and_stale_model_catalog(self):
+        self.pilot_fixture()
+        for name in ("launcher.lock", "prepare.lock"):
+            with locked(Path(self.config["state_root"]) / name), self.assertRaisesRegex(Rejected, "already_running"):
+                self.select_fixture()
+        with patch.object(operator, "pilot_source_idle", side_effect=operator.Refused("pilot_source_requires_operator_recovery")), \
+                self.assertRaisesRegex(operator.Refused, "requires_operator_recovery"):
+            self.action("select-pilot", issue=132)
+        catalog = Path(self.config["state_root"]) / "model-catalog.json"
+        stale = json.loads(catalog.read_bytes())
+        stale["queried_at"] -= 90000
+        atomic(catalog, json.dumps(stale).encode())
+        with self.assertRaisesRegex(Rejected, "model_catalog_refresh_required"):
+            self.select_fixture()
+
+    def test_idle_probe_requires_confirmed_stop_and_refuses_any_worker_history(self):
+        self.pilot_fixture()
+        with self.assertRaisesRegex(operator.Refused, "confirmed_stop_required"):
+            operator.pilot_source_idle(self.data, self.config)
+        atomic(Path(self.config["state_root"]) / "last_shutdown.json", b'{"stopped":true}')
+        with patch.object(operator, "run", return_value='{"pilot_source_idle":false}'), \
+                self.assertRaisesRegex(operator.Refused, "requires_operator_recovery"):
+            operator.pilot_source_idle(self.data, self.config)
+        atomic(Path(self.config["state_root"]) / "worker.json", b"{}")
+        with self.assertRaisesRegex(operator.Refused, "worker_history"):
+            operator.pilot_source_idle(self.data, self.config)
 
     def test_token_cannot_be_captured_in_logs(self):
         self.setup()

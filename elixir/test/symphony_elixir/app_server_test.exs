@@ -1407,12 +1407,14 @@ defmodule SymphonyElixir.AppServerTest do
     previous_custom_secret = System.get_env(custom_secret_env)
     previous_home = System.get_env("HOME")
     previous_trace = System.get_env("SYMP_TEST_CODEx_TRACE")
+    previous_context = System.get_env("SYMPHONY_DELIVERY_CONTEXT")
 
     on_exit(fn ->
       restore_env("LINEAR_API_KEY", previous_secret)
       restore_env(custom_secret_env, previous_custom_secret)
       restore_env("HOME", previous_home)
       restore_env("SYMP_TEST_CODEx_TRACE", previous_trace)
+      restore_env("SYMPHONY_DELIVERY_CONTEXT", previous_context)
     end)
 
     try do
@@ -1435,6 +1437,7 @@ defmodule SymphonyElixir.AppServerTest do
       System.put_env(custom_secret_env, "custom-secret-that-must-not-reach-child")
       System.put_env("HOME", bash_home)
       System.put_env("SYMP_TEST_CODEx_TRACE", trace_file)
+      System.put_env("SYMPHONY_DELIVERY_CONTEXT", "stale-context")
 
       File.write!(codex_binary, """
       #!/bin/sh
@@ -1442,6 +1445,7 @@ defmodule SymphonyElixir.AppServerTest do
       printf 'PROFILE_LOADED:%s\n' "$#{profile_marker_env}" >> "$trace_file"
       printf 'CANONICAL_SECRET:%s\n' "$LINEAR_API_KEY" >> "$trace_file"
       printf 'CUSTOM_SECRET:%s\n' "$#{custom_secret_env}" >> "$trace_file"
+      printf 'CONTEXT:%s\n' "$SYMPHONY_DELIVERY_CONTEXT" >> "$trace_file"
       count=0
 
       while IFS= read -r line; do
@@ -1491,6 +1495,18 @@ defmodule SymphonyElixir.AppServerTest do
       assert File.read!(trace_file) =~ "CANONICAL_SECRET:\n"
       assert File.read!(trace_file) =~ "CUSTOM_SECRET:\n"
       refute File.read!(trace_file) =~ "secret-that-must-not-reach-child"
+      assert File.read!(trace_file) =~ "CONTEXT:\n"
+
+      context = %{"cycle_id" => "cycle-current", "branch" => "agent/task", "literal" => "'$(echo injected)`echo injected`\nsecond line"}
+      assert {:ok, _} = AppServer.run(workspace, "Bound context", issue, delivery: %{context: context})
+      assert File.read!(trace_file) =~ "CONTEXT:" <> Jason.encode!(context) <> "\n"
+
+      before = File.read!(trace_file)
+
+      assert {:error, :hook_context_invalid} =
+               AppServer.start_session(workspace, delivery: %{context: %{"data" => String.duplicate("x", 16_385)}})
+
+      assert File.read!(trace_file) == before
     after
       File.rm_rf(test_root)
     end
@@ -1568,12 +1584,15 @@ defmodule SymphonyElixir.AppServerTest do
         labels: ["backend"]
       }
 
+      context = %{"cycle_id" => "remote-cycle", "branch" => "agent/task", "literal" => "'$(echo literal)"}
+
       assert {:ok, _result} =
                AppServer.run(
                  remote_workspace,
                  "Run remote worker",
                  issue,
-                 worker_host: "worker-01:2200"
+                 worker_host: "worker-01:2200",
+                 delivery: %{context: context}
                )
 
       trace = File.read!(trace_file)
@@ -1584,8 +1603,9 @@ defmodule SymphonyElixir.AppServerTest do
       assert argv_line =~ "cd "
       assert argv_line =~ remote_workspace
       assert argv_line =~ "unset LINEAR_API_KEY"
-      assert argv_line =~ "exec "
-      assert argv_line =~ "fake-remote-codex app-server"
+      assert trace =~ "exec fake-remote-codex app-server"
+      assert trace =~ Base.encode64(Jason.encode!(context))
+      assert trace =~ "export SYMPHONY_DELIVERY_CONTEXT"
 
       expected_turn_policy = %{
         "type" => "workspaceWrite",

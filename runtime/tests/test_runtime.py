@@ -125,6 +125,37 @@ class RuntimeTest(unittest.TestCase):
         with self.assertRaisesRegex(Rejected, "profile_checkout_dirty"):
             cli.verify_source(value)
 
+    def test_render_allows_cold_codex_startup_and_preserves_project_timeout(self):
+        value = self.configured()
+        for configured, expected in (({}, 60000), ({"read_timeout_ms": 90000}, 90000)):
+            with self.subTest(configured=configured):
+                Path(value["workflow"]).unlink(missing_ok=True)
+                self.template({"tracker": {"kind": "github_projects"}, "codex": configured})
+                config.render(value)
+                rendered = json.loads(Path(value["workflow"]).read_text().split("---")[1])
+                self.assertEqual(rendered["codex"]["read_timeout_ms"], expected)
+
+    def test_render_rejects_invalid_codex_configuration_before_writing(self):
+        value = self.configured()
+        self.template({"tracker": {"kind": "github_projects"}, "codex": "invalid"})
+        with self.assertRaisesRegex(Rejected, "invalid_codex_configuration"):
+            config.render(value)
+        self.assertFalse(Path(value["workflow"]).exists())
+
+    def test_render_scopes_git_writes_to_container_and_preserves_explicit_policy(self):
+        value = self.configured()
+        self.template()
+        config.render(value)
+        policy = config.workflow_settings(value)["codex"]["turn_sandbox_policy"]
+        self.assertEqual(policy["type"], "workspaceWrite")
+        self.assertEqual(policy["writableRoots"], ["/workspace", "/workspace/repo", "/workspace/repo/.git"])
+        self.assertFalse(policy["networkAccess"])
+        Path(value["workflow"]).unlink()
+        explicit = {"type": "readOnly"}
+        self.template({"tracker": {"kind": "github_projects"}, "codex": {"turn_sandbox_policy": explicit}})
+        config.render(value)
+        self.assertEqual(config.workflow_settings(value)["codex"]["turn_sandbox_policy"], explicit)
+
     def test_generic_runtime_has_no_machine_identifiers(self):
         runtime = Path(__file__).resolve().parents[1]
         for directory in ("scripts", "lib", "worker", "config"):

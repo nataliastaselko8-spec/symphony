@@ -225,7 +225,7 @@ defmodule SymphonyElixir.OperatorTest do
     c = setup_policy(G.initial())
     assert {:ok, _} = build(c, "resume", %{"reason" => "Resume"})
     assert {:error, :invalid_operator_payload} = build(c, "resume", limits())
-    assert {:error, :ready_allowed_item_required} = build(setup_policy(State.new()), "resume", %{"reason" => "x"})
+    assert {:error, :owned_allowed_item_required} = build(setup_policy(State.new()), "resume", %{"reason" => "x"})
     {form, obs, settings, state} = setup_policy(G.reviewed())
     obs = put_in(obs.facts["pr"], %{"number" => 7, "head_sha" => G.sha("b"), "state" => "open"})
     assert {:ok, _} = Policy.build(%{form | action: "review_resume"}, limits(), obs, settings, state)
@@ -236,6 +236,47 @@ defmodule SymphonyElixir.OperatorTest do
     assert {:ok, _} = Policy.build(%{form | action: "finish_cancel"}, %{"reason" => "Closed"}, obs, settings, state)
     assert {:error, :unvalidated_base} = Policy.build(%{form | action: "finish_cancel"}, %{"reason" => "Closed"}, obs, settings, %{state | "baseline" => nil})
     assert {:error, :unvalidated_base} = Policy.build(%{form | action: "resume"}, %{"reason" => "x"}, obs, settings, %{state | "baseline" => nil})
+  end
+
+  test "resume accepts the retained working issue without admitting a different or revoked task" do
+    state = G.initial() |> G.apply!("block", %{"reason" => "worker_stopped_requires_reconciliation"})
+    {form, obs, settings, ^state} = setup_policy(state)
+    [ready] = obs.facts["project"]["items"]
+    working = %{ready | "state" => settings.project.states["working"]}
+    observe = fn rows -> put_in(obs.facts["project"]["items"], rows) end
+    resume = %{form | action: "resume"}
+    payload = %{"reason" => "Resume the retained task after repairing its environment"}
+
+    for row <- [ready, working] do
+      assert {:ok, command} = Policy.build(resume, payload, observe.([row]), settings, state)
+      assert {:ok, continued} = Decision.apply(state, command)
+      assert continued["cycle"]["phase"] == "reserved"
+      assert Map.take(continued["cycle"], ~w(id owner task work budget)) == Map.take(state["cycle"], ~w(id owner task work budget))
+    end
+
+    for rows <- [
+          [],
+          [%{working | "item_id" => "other"}],
+          [put_in(working["native_ref"]["issue_id"], "different-issue")],
+          [put_in(working["native_ref"]["repo"], "Elsewhere/app")],
+          [%{working | "eligible" => false}],
+          [%{working | "archived" => true}],
+          [%{working | "issue_state" => "CLOSED"}],
+          [%{working | "state" => "Needs human decision"}],
+          [%{working | "state" => nil}]
+        ] do
+      assert {:error, :owned_allowed_item_required} = Policy.build(resume, payload, observe.(rows), settings, state)
+    end
+
+    assert {:ok, _} = Policy.build(resume, payload, observe.([working]), put_in(settings.project.item_ids, ["item-A"]), state)
+    assert {:error, :owned_allowed_item_required} = Policy.build(resume, payload, observe.([working]), put_in(settings.project.item_ids, ["other"]), state)
+    assert {:error, :unvalidated_base} = Policy.build(resume, payload, observe.([working]), settings, %{state | "baseline" => nil})
+    assert {:error, :observation_required} = Policy.build(resume, payload, %{observe.([working]) | complete: false}, settings, state)
+    assert {:error, :ready_allowed_item_required} = Policy.build(%{form | action: "recovery"}, Map.put(limits(), "item_id", "item-A"), observe.([working]), settings, state)
+
+    review = observe.([working])
+    review = put_in(review.facts["pr"], %{"number" => 7, "head_sha" => G.sha("b"), "state" => "open"})
+    assert {:error, :ready_allowed_item_required} = Policy.build(%{form | action: "review_resume"}, limits(), review, settings, G.reviewed())
   end
 
   test "safe presentation omits internal state and handles incomplete views" do
@@ -260,6 +301,7 @@ defmodule SymphonyElixir.OperatorTest do
           :operator_form_expired,
           :operator_reason_required,
           :ready_allowed_item_required,
+          :owned_allowed_item_required,
           :positive_budget_required,
           :close_pr_or_validate_merged_dev,
           :environment_not_ready,

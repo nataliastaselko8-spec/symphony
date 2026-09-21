@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Installation)
+param([Parameter(Mandatory=$true)][string]$Installation, [switch]$Execute)
 . (Join-Path $PSScriptRoot 'support.ps1')
 $data = Read-Json $Installation
 if ($data.installation_id -notmatch '^[0-9a-f]{32}$') { throw 'Invalid installation identity.' }
@@ -16,6 +16,8 @@ try {
     $mutex = Enter-InstallationLock $data.installation_id
     $locked = $true
     Verify-Helpers (Read-Json (Join-Path $data.install_home 'setup.json'))
+    $selected = @($data.runtime_config.pilot_item_ids).Count
+    if (($selected -gt 0 -and -not $Execute) -or ($Execute -and $selected -ne 1)) { throw 'explicit_single_pilot_execution_required' }
     Write-Json $recordPath $record
     $keeper = New-WorkerKeeper $data
     $powershell = Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
@@ -24,6 +26,7 @@ try {
     $prime = Invoke-Native $powershell ($baseArgs + @('Prime','-Installation',$Installation)) | ConvertFrom-Json
     $arguments = @('-d',$data.controller.distro,'-u',$data.controller.user,'--cd','/','--exec','python3','-I','-B',
                    $prime.script,'--installation',$prime.installation,'start','--supervised')
+    if ($Execute) { $arguments += '--execute' }
     $controller = New-NativeProcess (Wsl-Path) $arguments -Redirect
     $drains = Start-LogDrain $controller $data.install_home
     $deadline = [DateTime]::UtcNow.AddSeconds(90)

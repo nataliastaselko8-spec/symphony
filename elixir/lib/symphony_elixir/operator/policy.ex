@@ -108,7 +108,7 @@ defmodule SymphonyElixir.Operator.Policy do
 
   defp data("resume", payload, obs, settings, state, _) do
     with true <- keys?(payload, ~w(reason)),
-         {:ok, _} <- eligible(obs, settings, get_in(state, ["cycle", "task", "item_id"])),
+         {:ok, _} <- resumable(obs, settings, get_in(state, ["cycle", "task"])),
          :ok <- baseline(state, obs) do
       {:ok, %{"sha" => obs.facts["dev_sha"]}}
     else
@@ -152,19 +152,30 @@ defmodule SymphonyElixir.Operator.Policy do
       else: {:error, :unvalidated_base}
   end
 
-  defp eligible(obs, settings, id) do
+  defp resumable(obs, settings, %{"item_id" => id, "issue_id" => issue_id}) do
+    with {:ok, row} <- eligible(obs, settings, id, ["ready", "working"]),
+         true <- row["native_ref"]["issue_id"] == issue_id do
+      {:ok, row}
+    else
+      _ -> {:error, :owned_allowed_item_required}
+    end
+  end
+
+  defp resumable(_, _, _), do: {:error, :owned_allowed_item_required}
+
+  defp eligible(obs, settings, id, states \\ ["ready"]) do
     row = Enum.find(get_in(obs.facts, ["project", "items"]) || [], &(&1["item_id"] == id))
 
-    if eligible_row?(row, settings) and (is_nil(settings.project.item_ids) or id in settings.project.item_ids),
+    if eligible_row?(row, settings, states) and (is_nil(settings.project.item_ids) or id in settings.project.item_ids),
       do: {:ok, row},
       else: {:error, :ready_allowed_item_required}
   end
 
-  defp eligible_row?(nil, _), do: false
+  defp eligible_row?(nil, _, _), do: false
 
-  defp eligible_row?(row, settings) do
+  defp eligible_row?(row, settings, states) do
     row["eligible"] == true and row["archived"] == false and row["issue_state"] == "OPEN" and
-      row["state"] == settings.project.states["ready"] and row["native_ref"]["repo"] == settings.repo
+      row["state"] in Enum.map(states, &settings.project.states[&1]) and row["native_ref"]["repo"] == settings.repo
   end
 
   defp limits(payload, recovery?) do

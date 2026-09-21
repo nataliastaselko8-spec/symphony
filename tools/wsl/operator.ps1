@@ -1,11 +1,12 @@
 [CmdletBinding()]
 param(
     [Parameter(Position=0)]
-    [ValidateSet('Setup', 'Start', 'Stop', 'Status', 'Check', 'Login', 'Models', 'Select-Model', 'Token', 'Open', 'Inspect', 'Catalog', 'Prime')]
+    [ValidateSet('Setup', 'Start', 'Stop', 'Status', 'Check', 'Login', 'Models', 'Select-Model', 'Select-Pilot', 'Token', 'Open', 'Inspect', 'Catalog', 'Prime')]
     [string]$Action = 'Status',
     [string]$Installation = (Join-Path $PSScriptRoot '../../.runtime-local/installation.json'),
     [string]$Model,
     [string]$Effort,
+    [int]$Issue,
     [switch]$Execute
 )
 $ErrorActionPreference = 'Stop'
@@ -15,10 +16,12 @@ $installationData = Get-Content -Raw -Encoding UTF8 -LiteralPath $Installation |
 if ($Execute -and $Action -ne 'Start') { throw '-Execute is only supported by Start.' }
 if ($Action -eq 'Select-Model' -and (-not $Model -or -not $Effort)) { throw 'Select-Model requires both -Model and -Effort.' }
 if (($Model -or $Effort) -and $Action -ne 'Select-Model') { throw 'Model and Effort are only supported by Select-Model.' }
+if (($Action -eq 'Select-Pilot' -and $Issue -le 0) -or ($PSBoundParameters.ContainsKey('Issue') -and $Action -ne 'Select-Pilot')) { throw 'Select-Pilot requires a positive -Issue number; other commands do not accept Issue.' }
 $helperSource = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'operator.py')))
 
 function Invoke-OperatorHelper([string]$HelperAction, [bool]$Root, $HostInfo = $null) {
     $request = @{ action = $HelperAction; installation = $installationData; source = $helperSource }
+    if ($HelperAction -eq 'select-pilot') { $request.issue = $Issue }
     if ($null -ne $HostInfo) { $request.host_info = $HostInfo }
     $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($request | ConvertTo-Json -Depth 30 -Compress)))
     # ASCII stdin avoids PowerShell 5.1 native argument quoting and binary-pipeline conversion.
@@ -50,7 +53,7 @@ $lifecycle = $null
 try {
 # Start keeps this cooperative lock until its controller exits. Stop first asks
 # that controller to exit, then takes the lock before touching the host service.
-if ($Action -in @('Setup', 'Start', 'Login', 'Models', 'Select-Model', 'Prime')) {
+if ($Action -in @('Setup', 'Start', 'Login', 'Models', 'Select-Model', 'Select-Pilot', 'Prime')) {
     $lifecycle = Enter-LifecycleLock
 }
 if ($Action -eq 'Open') {
@@ -60,6 +63,10 @@ if ($Action -eq 'Open') {
 if ($Action -eq 'Setup') {
     $hostInfo = Invoke-OperatorHelper 'host-start' $true
     Invoke-OperatorHelper 'setup' $false $hostInfo | ConvertTo-Json -Depth 10
+    return
+}
+if ($Action -eq 'Select-Pilot') {
+    Invoke-OperatorHelper 'select-pilot' $false | ConvertTo-Json -Depth 40
     return
 }
 if ($Action -in @('Start', 'Login', 'Models', 'Prime')) {

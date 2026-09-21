@@ -116,6 +116,18 @@ def render(config):
         return value
     resolved = bind(settings)
     require(isinstance(resolved, dict) and resolved.get("tracker", {}).get("kind") == "github_projects", "projects_workflow_required")
+    # Cold app-server startup can refresh remote models before creating a thread.
+    # Preserve a project's explicit timeout, but do not inherit the 5s RPC default.
+    codex = resolved.setdefault("codex", {})
+    require(isinstance(codex, dict), "invalid_codex_configuration")
+    codex.setdefault("read_timeout_ms", 60_000)
+    # These fixed paths belong to the isolated container, never the host checkout.
+    # Keep repo explicit to protect .codex/.agents, and allow local Git commits.
+    codex.setdefault("turn_sandbox_policy", {
+        "type": "workspaceWrite", "writableRoots": ["/workspace", "/workspace/repo", "/workspace/repo/.git"],
+        "readOnlyAccess": {"type": "fullAccess"}, "networkAccess": False,
+        "excludeTmpdirEnvVar": False, "excludeSlashTmp": False,
+    })
     require("${runtime." not in prompt, "runtime_slots_not_allowed_in_prompt")
     raw = b"---\n" + canonical(resolved) + b"\n---\n" + prompt.encode()
     output = no_links(config["workflow"])

@@ -37,6 +37,10 @@ function global:wsl.exe {
             'sync' { '{"ssh_ready":true}' }
             'install-helper' { '{"script":"/home/user/config with spaces/operator.py","installation":"/home/user/config with spaces/install.json"}' }
             'host-stop' { '{"host_stopped":true,"ownership":"managed"}' }
+            'select-pilot' {
+                Assert-That ($request.issue -eq 132) 'Issue number did not reach the selector'
+                '{"selected":{"issue":132},"execution_started":false}'
+            }
             default { throw ('Unexpected helper: ' + $request.action) }
         }
     } else {
@@ -52,15 +56,17 @@ function global:wsl.exe {
 }
 
 try {
-    foreach ($action in @('Setup', 'Start', 'Login', 'Models', 'Status', 'Check', 'Stop', 'Token', 'Select-Model')) {
+    foreach ($action in @('Setup', 'Start', 'Login', 'Models', 'Status', 'Check', 'Stop', 'Token', 'Select-Model', 'Select-Pilot')) {
         $global:operatorCalls.Clear()
         $extra = @{}
         if ($action -eq 'Select-Model') { $extra = @{ Model = 'test-model'; Effort = 'high' } }
+        if ($action -eq 'Select-Pilot') { $extra = @{ Issue = 132 } }
         & $wrapper $action -Installation $descriptor @extra | Out-Null
         switch ($action) {
             'Setup' { Assert-Actions @('host-start', 'setup') }
             { $_ -in @('Start', 'Login', 'Models') } { Assert-Actions @('host-start', 'sync', 'install-helper', $action.ToLowerInvariant()) }
             'Stop' { Assert-Actions @('install-helper', 'stop', 'host-stop') }
+            'Select-Pilot' { Assert-Actions @('select-pilot') }
             default { Assert-Actions @('install-helper', $action.ToLowerInvariant()) }
         }
         $first = $global:operatorCalls[0]
@@ -80,7 +86,8 @@ try {
         $passed++
     }
     $global:operatorFailure = ''
-    foreach ($invalid in @(@{ Action='Select-Model'; Model='test-model' }, @{ Action='Stop'; Execute=$true }, @{ Action='Start'; Effort='high' })) {
+    foreach ($invalid in @(@{ Action='Select-Model'; Model='test-model' }, @{ Action='Stop'; Execute=$true }, @{ Action='Start'; Effort='high' },
+                          @{ Action='Select-Pilot' }, @{ Action='Select-Pilot'; Issue=-1 }, @{ Action='Start'; Issue=132 })) {
         $global:operatorCalls.Clear()
         $rejected = $false
         try { & $wrapper -Installation $descriptor @invalid | Out-Null }

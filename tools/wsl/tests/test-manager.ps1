@@ -37,6 +37,7 @@ $function:FixtureNative=${function:New-NativeProcess}
 function New-NativeProcess {
     param($File,$Arguments,[switch]$Redirect)
     $role=if ($Arguments -contains '--supervised') { 'controller' } else { 'worker' }
+    if ($role -eq 'controller') { [IO.File]::WriteAllText((Join-Path $script:fixtureRoot 'controller-argv.json'),($Arguments | ConvertTo-Json)) }
     return FixtureNative (Join-Path $script:fixtureRoot 'process-fixture.exe') @($script:fixtureRoot,$role) -Redirect
 }
 function Invoke-Native {
@@ -67,7 +68,7 @@ if ([IO.Path]::GetFileName($MyInvocation.ScriptName) -eq 'manager.ps1') { Start-
 '@
     [IO.File]::AppendAllText((Join-Path $installer 'support.ps1'),$fake)
     $id=[Guid]::NewGuid().ToString('N')
-    $data=@{installation_id=$id; install_home=$root; worker=@{distro='fixture-worker'}; controller=@{distro='fixture-controller'; user='fixture'}; runtime_config=@{worker_user='fixture'; dashboard_port=12345}}
+    $data=@{installation_id=$id; install_home=$root; worker=@{distro='fixture-worker'}; controller=@{distro='fixture-controller'; user='fixture'}; runtime_config=@{worker_user='fixture'; dashboard_port=12345; pilot_item_ids=@()}}
     $descriptor=Join-Path $root 'installation.json'; Write-Json $descriptor $data
     $helpers=@{}
     foreach ($name in $names) { $helpers[$name]=(Get-FileHash -LiteralPath (Join-Path $installer $name) -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -105,7 +106,23 @@ if ([IO.Path]::GetFileName($MyInvocation.ScriptName) -eq 'manager.ps1') { Start-
     while (-not (Test-Path -LiteralPath (Join-Path $root 'worker.exited')) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
     Assert (Test-Path -LiteralPath (Join-Path $root 'worker.exited')) 'Worker keepalive survived stop'
     Assert ($null -eq (Get-Manager ([pscustomobject]$data))) 'Dead manager still reported live'
-    Write-Host 'PASS Start after saved failure, hidden manager readiness, retained child processes, stale stop rejection and confirmed shutdown'
+    # The actual public Start must require explicit consent for a selected pilot.
+    $data.runtime_config.pilot_item_ids=@('PVTI_fixture')
+    Write-Json $descriptor $data
+    $rejected=$false
+    try { Invoke-Native $shell $argsList -TimeoutSeconds 15 | Out-Null } catch { $rejected=$true }
+    Assert $rejected 'Selected pilot started without Execute'
+    foreach ($name in @('controller.exited','worker.exited','stop-controller')) { [IO.File]::Delete((Join-Path $root $name)) }
+    Invoke-Native $shell ($argsList + '-Execute') -TimeoutSeconds 20 | Out-Null
+    $record=Read-Json $recordPath
+    $manager.Dispose()
+    $manager=Get-Process -Id $record.pid
+    $argv=Read-Json (Join-Path $root 'controller-argv.json')
+    Assert ($argv -contains '--execute') 'Execute was not propagated to the Linux launcher'
+    Write-Json (Join-Path $root 'stop-request.json') @{installation_id=$id; token=$record.token}
+    Assert ($manager.WaitForExit(15000)) 'Pilot fixture did not stop'
+    Assert (Read-Json $recordPath).stopped 'Pilot stop was not confirmed'
+    Write-Host 'PASS Start after saved failure, hidden manager, stale stop rejection, explicit pilot execution and confirmed shutdown'
 } finally {
     if ($null -ne $manager) { if (-not $manager.HasExited) { $manager.Kill(); $manager.WaitForExit() }; $manager.Dispose() }
     foreach ($role in @('worker','controller')) {

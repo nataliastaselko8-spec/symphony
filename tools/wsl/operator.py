@@ -4,6 +4,7 @@ Transferred through stdin by symphony.ps1; never installed in the task container
 Only the existing root host supervisor and controller runtime execute workloads.
 """
 import base64
+import copy
 import hashlib
 import json
 import os
@@ -284,12 +285,125 @@ def install_helper(request):
     return {"script": str(script), "installation": str(installation)}
 
 
+def pilot_source_idle(data, config):
+    """Replay the existing store with its own scope; never reset uncertain work."""
+    from symphony_runtime.common import private_file, read_json
+    root = Path(config["state_root"])
+    need(not (root / "worker.json").exists(), "pilot_source_has_worker_history")
+    shutdown = root / "last_shutdown.json"
+    need(shutdown.exists() and read_json(private_file(shutdown)).get("stopped") is True,
+         "confirmed_stop_required_before_pilot")
+    expression = r'''
+    Logger.configure(level: :error)
+    alias SymphonyElixir.{Config.Schema, Workflow}
+    alias SymphonyElixir.DeliveryGate.{Settings, Snapshot, Store}
+    {:ok, workflow} = Workflow.load(System.fetch_env!("SYMPHONY_PILOT_WORKFLOW"))
+    {:ok, settings} = Schema.parse(workflow.config)
+    {:ok, gate} = Settings.from_config(settings)
+    {:ok, port} = Store.open(gate.path)
+    result = try do
+      case Store.request(port, %{"op" => "read"}) do
+        {:ok, nil} -> true
+        {:ok, snapshot} ->
+          case Snapshot.decode(snapshot, gate.scope) do
+            {:ok, verified} ->
+              state = verified["state"]
+              state["status"] in ["idle", "bootstrap_required"] and
+                Enum.all?(~w(cycle last_cycle operator_pause environment_problem), &(state[&1] == nil))
+            _ -> false
+          end
+        _ -> false
+      end
+    after
+      Store.close(port)
+    end
+    IO.puts(Jason.encode!(%{pilot_source_idle: result}))
+    '''
+    env = os.environ.copy()
+    env["SYMPHONY_PILOT_WORKFLOW"] = config["workflow"]
+    for name, value in data["github_app"].items():
+        env[{"app_id": "SYMPHONY_GITHUB_APP_ID", "client_id": "SYMPHONY_GITHUB_APP_CLIENT_ID",
+             "installation_id": "SYMPHONY_GITHUB_INSTALLATION_ID"}[name]] = value
+    env["SYMPHONY_GITHUB_APP_PRIVATE_KEY_PATH"] = config["app_key"]
+    raw = run([data["controller"]["mise"], "exec", "--", "mix", "run", "--no-start", "--no-compile",
+               "--no-deps-check", "-e", expression], cwd=Path(config["symphony_root"]) / "elixir", env=env, timeout=45)
+    need(json.loads(raw).get("pilot_source_idle") is True, "pilot_source_requires_operator_recovery")
+
+
+def pilot_candidate(report, config, settings, issue):
+    provider = settings.workflow_settings(config)["tracker"]["provider"]
+    need(report["project"]["repo"] == provider["repo"], "pilot_repository_mismatch")
+    matches = [row for row in report["items"] if row.get("native_ref", {}).get("issue_number") == issue
+               and row["native_ref"].get("repo") == provider["repo"]]
+    need(len(matches) == 1, "pilot_issue_must_have_one_project_card")
+    row = matches[0]
+    need(not row["archived"] and row["issue_state"] == "OPEN" and row["state"] == provider["states"]["ready"]
+         and row["native_ref"]["agent_allowed_option_id"] == report["schema"]["agent_allowed_option_id"]
+         and not set(row["reasons"]) - {"outside_item_scope"}, "pilot_requires_ready_and_agent_allowed")
+    need(re.fullmatch(r"PVTI_[A-Za-z0-9_-]{1,190}", row["item_id"]) is not None, "invalid_pilot_item_id")
+    return row
+
+
+def select_pilot(data, config, settings, cli, issue):
+    """One initial pilot, new immutable profile; the previous store stays untouched."""
+    from symphony_runtime import models
+    from symphony_runtime.common import atomic, canonical, digest, private_dir, private_file, read_json
+    need(type(issue) is int and 1 <= issue <= 2**31 - 1, "positive_issue_number_required")
+    if config["pilot_item_ids"]:
+        need(data.get("pilot", {}).get("issue") == issue and
+             config["pilot_item_ids"] == [data["pilot"].get("item_id")], "pilot_already_selected")
+        return {"installation": data, "selected": data["pilot"], "execution_started": False}
+    with stopped_locks(config):
+        pilot_source_idle(data, config)
+        report = controller_action(data, "inspect", {})
+        row = pilot_candidate(report, config, settings, issue)
+        old_root = Path(config["state_root"])
+        models.available(models.selected(old_root), models.catalog(old_root, data["pins"]["worker_image"]))
+        identity = digest(canonical({"source": data["controller"]["config"], "repo": report["project"]["repo"],
+                                     "item": row["item_id"]}))[:24]
+        directory = private_dir(Path(data["controller"]["config"]).parent / ("pilot-" + identity), create=True)
+        target = directory / "local.json"
+        supplied = {**config, "pilot_item_ids": [row["item_id"]], "profile": "pilot-" + identity,
+                    "state_root": str(old_root.parent / (old_root.name + "-" + identity)),
+                    "workflow": str(directory / "WORKFLOW.md"), "manifest": str(directory / "deployment.json")}
+        expected = settings.resolve(supplied, target)
+        if target.exists():
+            need(settings.load(target) == expected, "existing_pilot_profile_differs")
+            proposed = expected
+        else:
+            proposed = settings.configure(target, supplied)
+        with stopped_locks(proposed):
+            new_root = Path(proposed["state_root"])
+            need(not any((new_root / name).exists() for name in ("delivery.json", "delivery.json.lock", "worker.json", "launcher.json")),
+                 "prepared_pilot_already_used")
+            for name in ("model-selection.json", "model-catalog.json"):
+                raw = private_file(old_root / name).read_bytes()
+                output = new_root / name
+                if output.exists():
+                    need(private_file(output).read_bytes() == raw, "prepared_pilot_model_changed")
+                else:
+                    atomic(output, raw)
+            settings.render(proposed)
+            settings.pin(proposed, data["pins"]["symphony_commit"], data["pins"]["profile_revision"],
+                         data["pins"]["worker_image"], execute=True)
+            cli.verify_source(proposed)
+        selected = {"issue": issue, "repo": report["project"]["repo"], "item_id": row["item_id"], "url": row["url"],
+                    "source_config": data["controller"]["config"], "source_state_root": config["state_root"]}
+        candidate = copy.deepcopy(data)
+        candidate["controller"]["config"] = str(target)
+        candidate["runtime_config"] = proposed
+        candidate["pilot"] = selected
+        return {"installation": candidate, "selected": selected, "execution_started": False}
+
+
 def controller_action(data, action, options):
     settings, cli = runtime(data)
     from symphony_runtime.common import private_file
     config = settings.load(data["controller"]["config"])
     need(config == settings.resolve(data["runtime_config"], data["controller"]["config"]), "installation_config_mismatch")
     cli.verify_source(config)
+    if action == "select-pilot":
+        return select_pilot(data, config, settings, cli, options.get("issue"))
     if action == "stop":
         outcome = cli.stop_inspection(config)
         need(outcome.get("stopped") is True, "controller_stop_unconfirmed")
@@ -368,7 +482,8 @@ if __name__ == "__main__" and len(sys.argv) > 1:
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--installation", required=True)
-    parser.add_argument("action", choices=("start", "stop", "status", "check", "login", "models", "select-model", "token", "inspect", "catalog"))
+    parser.add_argument("action", choices=("start", "stop", "status", "check", "login", "models", "select-model", "select-pilot", "token", "inspect", "catalog"))
+    parser.add_argument("--issue", type=int)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--model")
     parser.add_argument("--effort")
