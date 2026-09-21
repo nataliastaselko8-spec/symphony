@@ -125,6 +125,37 @@ class RuntimeTest(unittest.TestCase):
         with self.assertRaisesRegex(Rejected, "profile_checkout_dirty"):
             cli.verify_source(value)
 
+    def test_render_allows_cold_codex_startup_and_preserves_project_timeout(self):
+        value = self.configured()
+        for configured, expected in (({}, 60000), ({"read_timeout_ms": 90000}, 90000)):
+            with self.subTest(configured=configured):
+                Path(value["workflow"]).unlink(missing_ok=True)
+                self.template({"tracker": {"kind": "github_projects"}, "codex": configured})
+                config.render(value)
+                rendered = json.loads(Path(value["workflow"]).read_text().split("---")[1])
+                self.assertEqual(rendered["codex"]["read_timeout_ms"], expected)
+
+    def test_render_rejects_invalid_codex_configuration_before_writing(self):
+        value = self.configured()
+        self.template({"tracker": {"kind": "github_projects"}, "codex": "invalid"})
+        with self.assertRaisesRegex(Rejected, "invalid_codex_configuration"):
+            config.render(value)
+        self.assertFalse(Path(value["workflow"]).exists())
+
+    def test_render_scopes_git_writes_to_container_and_preserves_explicit_policy(self):
+        value = self.configured()
+        self.template()
+        config.render(value)
+        policy = config.workflow_settings(value)["codex"]["turn_sandbox_policy"]
+        self.assertEqual(policy["type"], "workspaceWrite")
+        self.assertEqual(policy["writableRoots"], ["/workspace", "/workspace/repo", "/workspace/repo/.git"])
+        self.assertFalse(policy["networkAccess"])
+        Path(value["workflow"]).unlink()
+        explicit = {"type": "readOnly"}
+        self.template({"tracker": {"kind": "github_projects"}, "codex": {"turn_sandbox_policy": explicit}})
+        config.render(value)
+        self.assertEqual(config.workflow_settings(value)["codex"]["turn_sandbox_policy"], explicit)
+
     def test_generic_runtime_has_no_machine_identifiers(self):
         runtime = Path(__file__).resolve().parents[1]
         for directory in ("scripts", "lib", "worker", "config"):
@@ -264,6 +295,7 @@ class RuntimeTest(unittest.TestCase):
         value.started_at = 0
         value.heartbeat_at = 0
         value.cgroup = "/system.slice/symphony-fixture.service"
+        value.seccomp_file = Path('/run/symphony-runtime/fixture/worker-seccomp.json')
         return value
 
     def test_old_interval_and_additional_request_fields_are_rejected(self):
@@ -373,6 +405,45 @@ class RuntimeTest(unittest.TestCase):
             if process.poll() is None:
                 process.terminate()
                 process.wait(timeout=5)
+
+    def test_lost_manager_pipe_requests_shutdown_and_preserves_work(self):
+        value = self.configured()
+        state = Path(value["state_root"])
+        retained = state / "unpublished-work"
+        retained.write_text("retain this")
+        executable = Path(value["symphony_root"]) / "elixir/bin/symphony"
+        executable.parent.mkdir(parents=True)
+        executable.write_text("#!" + sys.executable + "\nimport json,time,os\nfrom pathlib import Path\n"
+                              + "state=Path(" + repr(str(state)) + ")\n"
+                              + "while not (state/'shutdown.request').exists(): time.sleep(0.01)\n"
+                              + "fd=os.open(state/'shutdown.pending',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n"
+                              + "with os.fdopen(fd,'wb') as stream: stream.write((state/'shutdown.request').read_bytes())\n"
+                              + "os.replace(state/'shutdown.pending',state/'shutdown.ack')\n")
+        executable.chmod(0o700)
+        program = ("import sys,json;sys.path.insert(0,sys.argv[1]);from symphony_runtime import cli;"
+                   "cli.preflight=lambda c,*args:{'controller_ready':True};"
+                   "cli.confirm_shutdown=lambda c:{'stopped':True,'workspace_preserved':True};"
+                   "raise SystemExit(cli.launch(json.loads(sys.argv[2]),execute=True,config_path='/fixture',supervised=True))")
+        process = subprocess.Popen([sys.executable, "-I", "-B", "-c", program,
+                                    str(Path(__file__).resolve().parents[1] / "lib"), json.dumps(value)], stdin=subprocess.PIPE)
+        try:
+            import time
+            process.stdin.write(b"ALIVE\n")
+            process.stdin.flush()
+            deadline = time.monotonic() + 5
+            while not (state / "launcher.json").exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(cli.status(value)["running"])
+            process.stdin.close()  # The Windows owner has disappeared.
+            self.assertEqual(process.wait(timeout=10), 0)
+            self.assertTrue(read_json(state / "last_shutdown.json")["stopped"])
+            self.assertTrue((state / "shutdown.request").exists())
+            self.assertFalse((state / "launcher.json").exists())
+            self.assertEqual(retained.read_text(), "retain this")
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=10)
 
 
 if __name__ == "__main__":

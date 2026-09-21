@@ -31,7 +31,7 @@ defmodule SymphonyElixir.GitHub.Credentials.Reference do
 
   @profiles %{
     projects_write: %{"organization_projects" => "write", "issues" => "read", "metadata" => "read"},
-    publication: %{"issues" => "write", "pull_requests" => "write", "metadata" => "read"},
+    publication: %{"issues" => "write", "pull_requests" => "write", "contents" => "read", "metadata" => "read"},
     projects_read: %{"organization_projects" => "read", "issues" => "read", "contents" => "read", "metadata" => "read"},
     delivery_read: %{"actions" => "read", "pull_requests" => "read", "contents" => "read", "metadata" => "read"},
     github: %{"issues" => "write", "pull_requests" => "write", "contents" => "read", "metadata" => "read"},

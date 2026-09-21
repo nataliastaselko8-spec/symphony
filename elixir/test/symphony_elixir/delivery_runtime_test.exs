@@ -701,6 +701,44 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
     assert DeliveryRuntime.status(runtime).reason == :observation_deadline
   end
 
+  test "dispatch cancels an in-flight full observation before starting worker watch", c do
+    parent = self()
+    hold = start_supervised!({Agent, fn -> false end}, id: :hold_full_read)
+
+    observer = fn config, opts ->
+      if Agent.get(hold, & &1) do
+        send(parent, {:full_read_waiting, self(), Keyword.fetch!(opts, :context)})
+        receive do: (:release -> :ok)
+      end
+
+      c.opts[:observer].(config, opts)
+    end
+
+    runtime = boot(c, observer: observer)
+    reserve(runtime)
+    Agent.update(hold, fn _ -> true end)
+    DeliveryRuntime.refresh(runtime)
+    assert_receive {:full_read_waiting, reader, context}
+    read = :sys.get_state(runtime).read
+    monitor = Process.monitor(reader)
+    {pid, handle} = start_worker(runtime)
+    assert_receive {:DOWN, ^monitor, :process, ^reader, _}, 1_000
+
+    # Results and timeout messages already in the mailbox must be obsolete too.
+    send(runtime, {read.task.ref, {:ok, Observation.new(c.settings, context, facts(), [])}})
+    send(runtime, {:read_timeout, read.task.ref})
+    send(runtime, {read.task.ref, {:error, :unavailable}})
+    send(pid, :check)
+    assert_receive {:checked, :ok}
+    assert DeliveryRuntime.status(runtime).worker.interval == handle.context["interval_id"]
+
+    Agent.update(c.clock, fn _ -> 30_000 end)
+    DeliveryRuntime.refresh(runtime)
+    await(runtime, fn _ -> :sys.get_state(runtime).worker.checked_at == 30_000 end)
+    send(pid, :check)
+    assert_receive {:checked, :ok}
+  end
+
   test "watch refresh does not authorize a new interval and obsolete handles cannot stop its successor", c do
     runtime = boot(c)
     reserve(runtime)

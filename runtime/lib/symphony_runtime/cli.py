@@ -65,7 +65,24 @@ def verify_source(config):
         require(lock.get("symphony_commit") == manifest["symphony_commit"], "profile_symphony_pin_mismatch")
 
 
-def launch(config, delivery=False, *, execute=False, config_path=None):
+class SupervisorInput:
+    """A Windows parent keeps its stdin pipe open and sends bounded heartbeats."""
+    def __init__(self, stream):
+        self.last_seen = time.clock_gettime(time.CLOCK_BOOTTIME)
+        self.closed = threading.Event()
+        def receive():
+            try:
+                while stream.readline(64) == b"ALIVE\n":
+                    self.last_seen = time.clock_gettime(time.CLOCK_BOOTTIME)
+            finally:
+                self.closed.set()
+        threading.Thread(target=receive, daemon=True).start()
+
+    def healthy(self):
+        return not self.closed.is_set() and time.clock_gettime(time.CLOCK_BOOTTIME) - self.last_seen <= 15
+
+
+def launch(config, delivery=False, *, execute=False, config_path=None, supervised=False):
     require(sys.platform == "linux", "linux_required")
     report = preflight(config, execute)
     require(report["controller_ready"] if execute else report["inspection_ready"], "launch_preflight_failed")
@@ -88,6 +105,7 @@ def launch(config, delivery=False, *, execute=False, config_path=None):
             env["SYMPHONY_RUNTIME_HELPER"] = str(Path(config["symphony_root"]) / "runtime/scripts/controller.py")
         proc = None
         stop = threading.Event()
+        parent = SupervisorInput(sys.stdin.buffer) if supervised else None
         token = uuid.uuid4().hex
         endpoint = state / "launcher.sock"
         if endpoint.exists():
@@ -106,6 +124,8 @@ def launch(config, delivery=False, *, execute=False, config_path=None):
             proc = subprocess.Popen([str(executable), *args, config["workflow"]],
                                     cwd=executable.parent.parent, env=env, stdin=subprocess.DEVNULL, start_new_session=True)
             while proc.poll() is None and not stop.is_set():
+                if parent is not None and not parent.healthy():
+                    stop.set()
                 if execute and (state / "shutdown.ack").exists():
                     ack = read_json(private_file(state / "shutdown.ack"))
                     if ack.get("token") == token and ack.get("pilot_finished") is True:

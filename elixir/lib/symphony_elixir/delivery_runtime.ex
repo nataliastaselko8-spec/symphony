@@ -467,6 +467,9 @@ defmodule SymphonyElixir.DeliveryRuntime do
           watch_digest: state.observation.facts["watch_digest"]
         }
 
+        # A full read started while idle is bound to the pre-start store version.
+        # Its late result must not revoke the newly registered worker's permit.
+        state = cancel_full_read(state)
         send(pid, {:delivery_start, handle})
         Process.send_after(self(), {:work_deadline, interval}, receipt.remaining_ms)
         {:reply, {:ok, pid}, %{state | worker: worker, reason: nil, observation: nil}}
@@ -510,6 +513,14 @@ defmodule SymphonyElixir.DeliveryRuntime do
   defp start_read(state) do
     if state.now.() < max(state.next_read_at, state.retry_at), do: state, else: launch_read(state)
   end
+
+  defp cancel_full_read(%{read: %{kind: :full} = read} = state) do
+    Process.cancel_timer(read.timeout)
+    Task.shutdown(read.task, :brutal_kill)
+    %{state | read: nil}
+  end
+
+  defp cancel_full_read(state), do: state
 
   defp launch_read(state) do
     context = DeliveryGate.status(state.gate)

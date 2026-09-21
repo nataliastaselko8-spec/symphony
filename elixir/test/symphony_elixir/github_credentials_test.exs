@@ -136,6 +136,18 @@ defmodule SymphonyElixir.GitHubCredentialsTest do
     assert {:ok, _token, _expires} = Issuer.issue(reference, @now, request_fun: request)
   end
 
+  test "PR publication can read private refs without granting contents or Actions writes", %{key_path: path} do
+    {:ok, reference} = Credentials.reference(provider(path), :publication)
+    permissions = %{"issues" => "write", "pull_requests" => "write", "contents" => "read", "metadata" => "read"}
+
+    request = fn method, route, body, jwt ->
+      if method == "POST", do: assert(body == %{"repositories" => ["app"], "permissions" => permissions})
+      exchange(reference).(method, route, body, jwt)
+    end
+
+    assert {:ok, _token, _expires} = Issuer.issue(reference, @now, request_fun: request)
+  end
+
   test "installation identity mismatch or suspension prevents mint", %{reference: reference} do
     for replacement <- [
           %{"app_id" => 999},

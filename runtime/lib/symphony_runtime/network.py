@@ -7,6 +7,7 @@ import re
 import subprocess
 
 from .common import Rejected, canonical, digest, require
+from .cgroups import service_group
 
 DENY4 = ("0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
          "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.168.0.0/16", "198.18.0.0/15",
@@ -17,7 +18,8 @@ DENY6 = ("::/128", "::1/128", "::ffff:0:0/96", "64:ff9b::/96", "64:ff9b:1::/48",
 
 class Firewall:
     def __init__(self, cgroup, dns, execute=None):
-        require(re.fullmatch(r"system.slice/symphony-[a-zA-Z0-9_-]+\.service", cgroup), "invalid_firewall_cgroup")
+        require(isinstance(cgroup, str) and not cgroup.startswith("/"), "invalid_firewall_cgroup")
+        service_group("/" + cgroup)
         self.cgroup = cgroup
         self.chain = "SWR" + digest(cgroup.encode())[:16].upper()
         self.dns = tuple(str(ipaddress.ip_address(value)) for value in dns)

@@ -54,8 +54,10 @@ def main():
     parser.add_argument("--worker", required=True)
     parser.add_argument("--image", required=True)
     parser.add_argument("--package", required=True)
+    parser.add_argument("--windows-canary", help="Valid Windows cmd.exe copied as test input, never a host mount")
     args = parser.parse_args()
     require(os.geteuid() == 0, "smoke_requires_explicit_root_setup")
+    require(args.windows_canary or "microsoft" not in os.uname().release.lower(), "windows_canary_required_for_wsl_smoke")
     account = pwd.getpwnam(args.worker)
     suffix = uuid.uuid4().hex[:12]
     root = Path(tempfile.mkdtemp(prefix="smoke-данные ", dir=account.pw_dir))
@@ -70,6 +72,15 @@ def main():
         source.mkdir()
         command(["git", "init", "-b", "dev", str(source)])
         (source / "readme.txt").write_text("fixture base\n")
+        if args.windows_canary:
+            canary = Path(args.windows_canary)
+            require(canary.is_file() and not canary.is_symlink() and 64 <= canary.stat().st_size <= 2 * 1024**2,
+                    "invalid_windows_canary")
+            raw_canary = canary.read_bytes()
+            offset = int.from_bytes(raw_canary[60:64], 'little')
+            require(raw_canary[:2] == b'MZ' and raw_canary[offset:offset+4] == b'PE\0\0', "valid_pe_canary_required")
+            (source / "windows-canary.exe").write_bytes(raw_canary)
+            (source / "windows-canary.exe").chmod(0o755)
         command(["git", "-C", str(source), "add", "."])
         command(["git", "-C", str(source), "-c", "user.name=Runtime Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture"])
         base = command(["git", "-C", str(source), "rev-parse", "HEAD"])
@@ -84,6 +95,7 @@ def main():
                        bundle_size=len(raw), bundle_sha256=digest(raw), ssh_public_key=public)
         stop_event = threading.Event()
         failures = []
+        host = None
         try:
             with HostSession(args.package, args.worker, args.image, root, "smoke-" + suffix) as host:
                 def maintain():
@@ -125,7 +137,7 @@ def main():
                     paths = [str(sentinel), str(control / "key"), account.pw_dir, "/mnt/c", "/mnt/d", "/mnt/wsl", "/mnt/wslg",
                              "/run/WSL", "/usr/lib/wsl", "/var/run/docker.sock", f"/run/user/{account.pw_uid}/podman/podman.sock"]
                     # Feed inert Python through SSH stdin; no interpolated shell statements or credentials.
-                    script = """import errno, os, pathlib, json, resource, signal, subprocess
+                    script = """import errno, os, pathlib, json, resource, signal, subprocess, socket
 paths = json.loads(%r)
 for target in paths:
     path = pathlib.Path(target)
@@ -148,7 +160,44 @@ assert 'CapEff:\\t0000000000000000' in status
 assert 'NoNewPrivs:\\t1' in status and 'Seccomp:\\t2' in status
 assert os.getuid() == 10001
 assert os.environ['CODEX_HOME'] == '/codex'
+assert not os.environ.get('WSL_INTEROP')
+try: socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+except OSError as error: assert error.errno in (errno.EPERM, errno.EACCES, errno.EAFNOSUPPORT, errno.ENOSYS), ('vsock_error', error.errno)
+else: raise AssertionError('host_vsock_accessible')
+print('HOST_VSOCK_BLOCKED')
+for family in (socket.AF_UNIX, socket.AF_INET, socket.AF_INET6):
+    with socket.socket(family, socket.SOCK_STREAM): pass
+# A minimal static ELF32 exits successfully without the compatibility ABI guard.
+import struct
+code32 = bytes.fromhex('b801000000bb00000000cd80')
+ident = b'\\x7fELF\\x01\\x01\\x01' + bytes(9)
+elf32 = struct.pack('<16sHHIIIIIHHHHHH', ident, 2, 3, 1, 0x8048000+84, 52, 0, 0, 52, 32, 1, 0, 0, 0)
+elf32 += struct.pack('<IIIIIIII', 1, 0, 0x8048000, 0x8048000, 84+len(code32), 84+len(code32), 5, 4096) + code32
+compat = pathlib.Path('/workspace/compat-probe')
+compat.write_bytes(elf32)
+compat.chmod(0o755)
+try:
+    try: result32 = subprocess.run([str(compat)], capture_output=True, timeout=5)
+    except OSError as error: assert error.errno in (errno.ENOEXEC, errno.ENOENT, errno.EACCES, errno.EPERM)
+    else: assert result32.returncode in (-signal.SIGSYS, -signal.SIGKILL), ('compat_abi_allowed', result32.returncode)
+finally: compat.unlink()
+print('COMPAT_ABI_BLOCKED')
+canary = pathlib.Path('/workspace/repo/windows-canary.exe')
+if canary.exists():
+    try:
+        result = subprocess.run([str(canary), '/d', '/c', 'echo SYMPHONY_INTEROP_CANARY'],
+                                capture_output=True, timeout=15)
+    except OSError as error:
+        assert error.errno in (errno.ENOEXEC, errno.ENOENT, errno.EACCES, errno.EPERM), ('canary_error', error.errno)
+    else:
+        assert result.returncode != 0 and b'SYMPHONY_INTEROP_CANARY' not in result.stdout, 'windows_execution_possible'
+    print('WINDOWS_EXECUTION_BLOCKED')
 assert resource.getrlimit(resource.RLIMIT_FSIZE) == (268435456, 268435456)
+cgroup = pathlib.Path('/sys/fs/cgroup')
+assert (cgroup / 'cpu.max').read_text().strip() == '200000 100000', 'cpu_limit_missing'
+assert (cgroup / 'memory.max').read_text().strip() == '2147483648', 'memory_limit_missing'
+assert (cgroup / 'pids.max').read_text().strip() == '512', 'pids_limit_missing'
+print('CPU_MEMORY_PIDS_LIMITS_PASS')
 probe = pathlib.Path('/workspace/fsize-probe')
 previous_signal = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
 try:
@@ -327,8 +376,8 @@ print('FILESYSTEM_BOUNDARY_PASS')
                 print((root / "last-command-error.log").read_text()[:16384], flush=True)
             # This exact mkdtemp path under the explicitly named worker home is the only deletion target.
             require(root.parent == Path(account.pw_dir) and root.name.startswith("smoke-"), "cleanup_path_mismatch")
-            group = Path("/sys/fs/cgroup/system.slice") / ("symphony-smoke-" + suffix + ".service")
-            if not group.exists():
+            group = Path("/sys/fs/cgroup") / host.group if host is not None and host.group is not None else None
+            if group is not None and not group.exists():
                 shutil.rmtree(root)
             else:
                 print("STOP_UNCONFIRMED_PRESERVING_WORKSPACE=" + str(root), flush=True)

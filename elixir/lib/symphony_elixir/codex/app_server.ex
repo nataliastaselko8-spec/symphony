@@ -6,6 +6,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   require Logger
   alias SymphonyElixir.{Codex.DynamicTool, Config, PathSafety, SSH}
   alias SymphonyElixir.Codex.ModelSelection
+  alias SymphonyElixir.DeliveryRuntime.Guard
   alias SymphonyElixir.Runtime.Worker
 
   @initialize_id 1
@@ -202,7 +203,13 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp start_port(workspace, nil, dynamic_tool_binding) do
+  defp start_port(workspace, worker_host, dynamic_tool_binding) do
+    with {:ok, command} <- Guard.command("exec #{Config.settings!().codex.command}", dynamic_tool_binding.delivery) do
+      open_port(workspace, worker_host, dynamic_tool_binding, command)
+    end
+  end
+
+  defp open_port(workspace, nil, dynamic_tool_binding, command) do
     executable = System.find_executable("bash")
 
     if is_nil(executable) do
@@ -215,7 +222,7 @@ defmodule SymphonyElixir.Codex.AppServer do
             :binary,
             :exit_status,
             :stderr_to_stdout,
-            args: [~c"-lc", String.to_charlist(local_launch_command(dynamic_tool_binding))],
+            args: [~c"-lc", String.to_charlist(local_launch_command(dynamic_tool_binding, command))],
             cd: String.to_charlist(workspace),
             env: tracker_secret_port_env(dynamic_tool_binding),
             line: @port_line_bytes
@@ -226,25 +233,27 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp start_port(workspace, worker_host, dynamic_tool_binding) when is_binary(worker_host) do
-    remote_command = remote_launch_command(workspace, dynamic_tool_binding)
+  defp open_port(workspace, worker_host, dynamic_tool_binding, command) when is_binary(worker_host) do
+    remote_command = remote_launch_command(workspace, dynamic_tool_binding, command)
     SSH.start_port(worker_host, remote_command, line: @port_line_bytes)
   end
 
-  defp local_launch_command(dynamic_tool_binding) do
+  defp local_launch_command(dynamic_tool_binding, command) do
     [
       tracker_secret_unset_command(dynamic_tool_binding),
-      "exec #{Config.settings!().codex.command}"
+      "unset SYMPHONY_DELIVERY_CONTEXT",
+      command
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" && ")
   end
 
-  defp remote_launch_command(workspace, dynamic_tool_binding) when is_binary(workspace) do
+  defp remote_launch_command(workspace, dynamic_tool_binding, command) when is_binary(workspace) do
     [
       "cd #{shell_escape(workspace)}",
       tracker_secret_unset_command(dynamic_tool_binding),
-      "exec #{Config.settings!().codex.command}"
+      "unset SYMPHONY_DELIVERY_CONTEXT",
+      command
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" && ")

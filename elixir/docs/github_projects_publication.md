@@ -97,7 +97,10 @@ mirror и push в `dev`/`main` отсутствуют. Проверяется у
 Память, размер вывода/файла и CPU Git-процесса ограничены, операция имеет timeout.
 
 Installation tokens получаются отдельно: `contents_write` для Git,
-`publication` для Issues/PR и `projects_write` для поля Status. В них нет
+`publication` для Issues/PR и чтения refs (`contents: read`), `projects_write` для поля Status. В приватном
+репозитории токен создания PR должен читать обе ветки; без этого GitHub отклоняет запрос
+с HTTP 422 `not all refs are readable`. Профиль публикации не получает `contents: write`.
+В них нет
 `Actions: write`, Administration или Workflows. Токен передаётся только доверенному
 Git child через askpass environment; не записывается в аргументы, bundle или store.
 GitHub permissions сами по себе не ограничивают запись отдельной веткой:

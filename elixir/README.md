@@ -57,6 +57,9 @@ manual dev validation, pause, cancellation, recovery and additive budgets. The r
 credential setup and an isolated demo using the actual Runtime/Gate with synthetic observations.
 The panel accepts separate manual Queue/Scheduler confirmation bound to verified deployment evidence;
 application validation must follow within 30 minutes. See the operator runbook for invalidation rules.
+Resuming a stopped cycle accepts its same open, allowed Project item in `Ready for agent` or
+`Agent working`, preserving the issue identity, branch and budget. New/recovery assignments and
+returning a reviewed PR to work still require `Ready for agent`.
 
 1. Make sure your codebase is set up to work well with agents: see
    [Harness engineering](https://openai.com/index/harness-engineering/).
@@ -184,6 +187,9 @@ Notes:
 - Workflows that run package managers or other commands that resolve external hosts should set
   `networkAccess: true` in `codex.turn_sandbox_policy`; otherwise DNS/network access may be denied
   by the Codex turn sandbox.
+- App-server receives the same bounded `SYMPHONY_DELIVERY_CONTEXT` as delivery hooks.
+  It carries task identity, never credentials or authority; launches without a delivery handle
+  clear any inherited value. Oversized contexts fail before the child starts.
 - `agent.max_turns` caps how many back-to-back Codex turns Symphony will run in a single agent
   invocation when a turn completes normally but the issue is still in an active state. Default: `20`.
 - If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
@@ -307,6 +313,9 @@ and monotonic active-time accounting. Publication and authenticated operator con
 as staged components. Production Projects startup remains disabled until verified SSH/Podman
 shutdown, the agent-runner profile and system acceptance are connected.
 Existing delivery stores have a changed scope fingerprint; there is no automatic migration.
+At worker dispatch, any full observation still running against the idle state is cancelled.
+Late results and timeout messages from that read cannot stop the new worker; its own watch
+still enforces current GitHub permissions and the existing freshness deadline.
 
 ### Jira Cloud adapter
 
