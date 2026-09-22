@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.Operator.Policy do
   @moduledoc "Server-owned forms and narrow decisions derived from fresh, scope-bound observations."
-  alias SymphonyElixir.DeliveryGate.Command
+  alias SymphonyElixir.DeliveryGate.{Command, StatusSync}
   alias SymphonyElixir.GitHubProjects.Delivery.QueueConfirmation
   alias SymphonyElixir.Operator.Decision
 
@@ -11,7 +11,7 @@ defmodule SymphonyElixir.Operator.Policy do
 
   @spec stamp(map() | nil) :: String.t() | nil
   def stamp(nil), do: nil
-  def stamp(observation), do: hash(Map.take(observation.facts, ~w(dev_sha deployment pr suspended_pr watch_digest policy_hashes)))
+  def stamp(observation), do: hash(Map.take(observation.facts, ~w(dev_sha deployment pr ci project suspended_pr watch_digest policy_hashes)))
 
   @spec hash(term()) :: String.t()
   def hash(value), do: :crypto.hash(:sha256, :erlang.term_to_binary(value, [:deterministic])) |> Base.encode16(case: :lower)
@@ -49,6 +49,11 @@ defmodule SymphonyElixir.Operator.Policy do
     end
   end
 
+  defp conditions("recheck_status", observation, state) do
+    ready = observation != nil and observation.complete and Decision.stopped?(state["cycle"])
+    if ready, do: :ok, else: {:error, :work_unresolved}
+  end
+
   defp conditions(action, observation, state) do
     allowed = allowed_reasons(action)
 
@@ -83,6 +88,21 @@ defmodule SymphonyElixir.Operator.Policy do
     if keys?(payload, ~w(reason)), do: {:ok, %{}}, else: {:error, :invalid_operator_payload}
   end
 
+  defp data("review_started", payload, obs, settings, state, _) do
+    work = get_in(state, ["cycle", "work"]) || %{}
+    valid = review_evidence?(obs.facts, work)
+    if valid and keys?(payload, ~w(reason)) and settings.project.states["review"] != nil and not Decision.held?(state), do: {:ok, %{}}, else: {:error, :review_not_ready}
+  end
+
+  defp data("validation_failed", payload, obs, _, _, _) do
+    if keys?(payload, ~w(reason)), do: {:ok, Map.put(proof(obs), "criteria", ["Operator rejected development validation"])}, else: {:error, :invalid_operator_payload}
+  end
+
+  defp data("recheck_status", payload, _, _, state, _) do
+    op = Enum.find(StatusSync.operations(state), &(&1["status"] not in ~w(confirmed superseded)))
+    if keys?(payload, ~w(reason)) and op, do: {:ok, %{"operation_id" => op["id"]}}, else: {:error, :status_result_not_allowed}
+  end
+
   defp data("validate", payload, obs, _, state, _) do
     if keys?(payload, ~w(reason criteria)) and payload["criteria"] == Decision.criteria() and
          (state["cycle"] != nil or obs.facts["open_pr_numbers"] == []),
@@ -106,6 +126,19 @@ defmodule SymphonyElixir.Operator.Policy do
     end
   end
 
+  defp data("resume", payload, obs, settings, %{"cycle" => %{"work" => %{"merge_sha" => sha}}} = state, _) when is_binary(sha) do
+    pr = obs.facts["pr"] || %{}
+    cycle = state["cycle"]
+    row = Enum.find(get_in(obs.facts, ["project", "items"]) || [], &(&1["item_id"] == cycle["task"]["item_id"]))
+
+    bound = pr["state"] == "merged" and pr["ancestry"] == "included" and pr["merge_sha"] == sha and pr["number"] == cycle["work"]["pr_number"]
+    item = owned_post_merge?(row, settings, cycle)
+
+    if keys?(payload, ~w(reason)) and bound and item,
+      do: {:ok, %{"sha" => obs.facts["dev_sha"]}},
+      else: {:error, :owned_allowed_item_required}
+  end
+
   defp data("resume", payload, obs, settings, state, _) do
     with true <- keys?(payload, ~w(reason)),
          {:ok, _} <- resumable(obs, settings, get_in(state, ["cycle", "task"])),
@@ -123,7 +156,7 @@ defmodule SymphonyElixir.Operator.Policy do
 
     with true <- keys?(payload, ["reason" | @fields]),
          true <- pr["state"] == "open" and pr["number"] == work["pr_number"] and pr["head_sha"] == work["head_sha"],
-         {:ok, _} <- eligible(obs, settings, get_in(state, ["cycle", "task", "item_id"])),
+         {:ok, _} <- eligible(obs, settings, get_in(state, ["cycle", "task", "item_id"]), review_states(settings)),
          :ok <- baseline(state, obs),
          {:ok, limits} <- limits(payload, false) do
       {:ok, Map.merge(limits, %{"sha" => obs.facts["dev_sha"], "head_sha" => pr["head_sha"], "pr_number" => pr["number"]})}
@@ -152,8 +185,21 @@ defmodule SymphonyElixir.Operator.Policy do
       else: {:error, :unvalidated_base}
   end
 
+  defp owned_post_merge?(row, settings, cycle) do
+    row != nil and row["archived"] == false and row["native_ref"]["issue_id"] == cycle["task"]["issue_id"] and row["native_ref"]["repo"] == settings.repo and
+      (settings.project.item_ids == nil or row["item_id"] in settings.project.item_ids)
+  end
+
+  defp review_evidence?(facts, work) do
+    pr = facts["pr"] || %{}
+    ci = facts["ci"] || %{}
+
+    pr["state"] == "open" and pr["number"] == work["pr_number"] and pr["head_sha"] == work["head_sha"] and
+      ci["result"] == "success" and ci["head_sha"] == work["head_sha"] and ci["base_sha"] == facts["dev_sha"]
+  end
+
   defp resumable(obs, settings, %{"item_id" => id, "issue_id" => issue_id}) do
-    with {:ok, row} <- eligible(obs, settings, id, ["ready", "working"]),
+    with {:ok, row} <- eligible(obs, settings, id, resume_states(settings)),
          true <- row["native_ref"]["issue_id"] == issue_id do
       {:ok, row}
     else
@@ -162,6 +208,9 @@ defmodule SymphonyElixir.Operator.Policy do
   end
 
   defp resumable(_, _, _), do: {:error, :owned_allowed_item_required}
+
+  defp resume_states(settings), do: if(settings.project.states["review"], do: ~w(ready working blocked), else: ~w(ready working))
+  defp review_states(settings), do: if(settings.project.states["review"], do: ~w(ready working blocked handoff review), else: ~w(ready))
 
   defp eligible(obs, settings, id, states \\ ["ready"]) do
     row = Enum.find(get_in(obs.facts, ["project", "items"]) || [], &(&1["item_id"] == id))
@@ -174,7 +223,9 @@ defmodule SymphonyElixir.Operator.Policy do
   defp eligible_row?(nil, _, _), do: false
 
   defp eligible_row?(row, settings, states) do
-    row["eligible"] == true and row["archived"] == false and row["issue_state"] == "OPEN" and
+    allowed = row["eligible"] == true or (row["agent_allowed"] == true and row["in_scope"] == true and Enum.all?(row["reasons"] || [], &(&1 == "inactive_status")))
+
+    allowed and row["archived"] == false and row["issue_state"] == "OPEN" and
       row["state"] in Enum.map(states, &settings.project.states[&1]) and row["native_ref"]["repo"] == settings.repo
   end
 

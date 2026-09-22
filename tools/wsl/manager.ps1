@@ -15,7 +15,12 @@ $record = [ordered]@{
 try {
     $mutex = Enter-InstallationLock $data.installation_id
     $locked = $true
-    Verify-Helpers (Read-Json (Join-Path $data.install_home 'setup.json'))
+    if (-not (Same-Json $data (Read-Json $Installation)) -or (Test-Path -LiteralPath (Join-Path $data.install_home 'pilot-selection.pending.json'))) {
+        throw 'pilot_selection_changed_retry_start'
+    }
+    $setup = Read-Json (Join-Path $data.install_home 'setup.json')
+    if ($setup.stage -ne 'complete' -or (Test-Path -LiteralPath (Join-Path $data.install_home 'update.pending.json')) -or (Test-Path -LiteralPath (Join-Path $data.install_home 'rollback.pending.json'))) { throw 'installation_transition_pending' }
+    Verify-Helpers $setup
     $selected = @($data.runtime_config.pilot_item_ids).Count
     if (($selected -gt 0 -and -not $Execute) -or ($Execute -and $selected -ne 1)) { throw 'explicit_single_pilot_execution_required' }
     Write-Json $recordPath $record
@@ -25,14 +30,15 @@ try {
     $baseArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$operator)
     $prime = Invoke-Native $powershell ($baseArgs + @('Prime','-Installation',$Installation)) | ConvertFrom-Json
     $arguments = @('-d',$data.controller.distro,'-u',$data.controller.user,'--cd','/','--exec','python3','-I','-B',
-                   $prime.script,'--installation',$prime.installation,'start','--supervised')
+                   $prime.script,'--installation',$prime.installation,'start','--supervised','--manager-token',$record.token)
     if ($Execute) { $arguments += '--execute' }
     $controller = New-NativeProcess (Wsl-Path) $arguments -Redirect
     $drains = Start-LogDrain $controller $data.install_home
     $deadline = [DateTime]::UtcNow.AddSeconds(90)
     while (-not $controller.HasExited) {
         if ($keeper.HasExited) { throw 'worker_keepalive_lost' }
-        $controller.StandardInput.Write("ALIVE`n")
+        $measurement = Get-WindowsStorageFrame $data $record.token
+        $controller.StandardInput.Write(($measurement | ConvertTo-Json -Depth 8 -Compress) + "`n")
         $controller.StandardInput.Flush()
         if (Test-Path -LiteralPath $stopPath) {
             $request = Read-Json $stopPath

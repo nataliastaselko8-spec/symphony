@@ -156,6 +156,15 @@ defmodule SymphonyElixir.OperatorWebTest do
 
     model = View.project(Map.put(status, :decisions, [record]))
 
+    sync = %{"role" => "blocked", "target" => "Needs human decision", "observed" => nil, "status" => "unknown", "error" => "<script>unsafe</script>", "confirmed_at_ms" => nil}
+    syncing = View.project(Map.put(status, :status_sync, [sync]))
+    html = render_component(&OperatorPanel.panel/1, model: syncing)
+    assert html =~ "project-status-sync" and html =~ "Needs human decision" and html =~ "Ожидается"
+    assert html =~ "unknown" and html =~ "&lt;script&gt;unsafe&lt;/script&gt;"
+    refute html =~ "<script>unsafe</script>"
+    confirmed = %{sync | "status" => "confirmed", "observed" => "Needs human decision", "error" => nil, "confirmed_at_ms" => 1_789_603_200_000}
+    assert render_component(&OperatorPanel.panel/1, model: %{syncing | status_sync: [confirmed]}) =~ "2026-09-17T00:00:00.000Z"
+
     runtime = %{
       ready: false,
       reasons: ["disk_space_low"],
@@ -170,6 +179,21 @@ defmodule SymphonyElixir.OperatorWebTest do
     assert html =~ "сессия ещё не подтверждена"
     assert html =~ "2 GiB" and html =~ "8 GiB"
     refute html =~ "must-not-leak"
+
+    disk = %{
+      "status" => "warning",
+      "reason" => nil,
+      "measured_at_ms" => 1_789_603_200_000,
+      "volumes" => [%{"id" => "volume:fixture", "roles" => ["controller", "worker"], "free_bytes" => 8_589_934_592, "status" => "warning"}]
+    }
+
+    storage = Map.put(active.storage, "windows_disk", disk)
+    html = render_component(&OperatorPanel.panel/1, model: %{active | storage: storage})
+    assert html =~ "controller, worker" and html =~ "17.09.2026 00:00:00 UTC"
+    assert length(Regex.scan(~r/volume:fixture/, html)) == 1
+    unknown = %{disk | "status" => "unknown", "reason" => "measurement_stale", "volumes" => [], "measured_at_ms" => nil}
+    html = render_component(&OperatorPanel.panel/1, model: %{active | storage: Map.put(storage, "windows_disk", unknown)})
+    assert html =~ "measurement_stale" and html =~ "нет свежих данных" and html =~ "Допуск закрыт"
     runtime = put_in(runtime.model["applied"], %{"model" => "fixture-model", "effort" => "high"})
     applied = View.project(Map.merge(status, %{execution_enabled: true, runtime_readiness: runtime}))
     assert applied.model_selection["applied"] == %{"model" => "fixture-model", "effort" => "high"}

@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.DeliveryGate.Snapshot do
   @moduledoc "Versioned snapshot with a bounded command journal for validation and idempotency."
 
-  alias SymphonyElixir.DeliveryGate.State
+  alias SymphonyElixir.DeliveryGate.{Lifecycle, Migration, State, StatusSync}
 
   @max_commands 20_000
 
@@ -10,15 +10,20 @@ defmodule SymphonyElixir.DeliveryGate.Snapshot do
 
   @spec decode(term(), map()) :: {:ok, map()} | {:error, atom()}
   def decode(snapshot, scope) do
-    with %{"schema_version" => 1, "scope" => ^scope, "commands" => commands} when is_list(commands) <- snapshot,
+    with %{"scope" => ^scope, "commands" => commands} when is_list(commands) <- snapshot,
          true <- length(commands) <= @max_commands,
-         {:ok, rebuilt} <- replay(commands, new(scope)),
+         {:ok, seed} <- seed(snapshot, scope, commands),
+         {:ok, rebuilt} <- replay(commands, seed),
          true <- rebuilt == snapshot do
       {:ok, rebuilt}
     else
       _ -> {:error, :invalid_snapshot}
     end
   end
+
+  defp seed(%{"schema_version" => 1}, scope, _), do: {:ok, new(scope)}
+  defp seed(%{"schema_version" => 2, "migration" => migration}, scope, commands), do: Migration.seed(migration, scope, commands)
+  defp seed(_, _, _), do: {:error, :invalid_snapshot_version}
 
   @spec append(map(), String.t(), non_neg_integer(), String.t(), map(), integer()) ::
           {:ok, map(), :new | :replayed} | {:error, atom()}
@@ -37,7 +42,14 @@ defmodule SymphonyElixir.DeliveryGate.Snapshot do
   end
 
   defp append_new(snapshot, command) do
-    with {:ok, state} <- State.apply_command(snapshot["state"], command["action"], command["args"]) do
+    result =
+      case command["action"] do
+        "status_transition" -> StatusSync.transition(snapshot["state"], command)
+        "lifecycle" -> Lifecycle.apply(snapshot["state"], command)
+        action -> State.apply_command(snapshot["state"], action, command["args"])
+      end
+
+    with {:ok, state} <- result do
       updated = %{snapshot | "state" => state, "revision" => snapshot["revision"] + 1}
       {:ok, Map.put(updated, "commands", snapshot["commands"] ++ [command]), :new}
     end

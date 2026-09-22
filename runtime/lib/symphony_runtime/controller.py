@@ -5,7 +5,7 @@ import re
 import time
 
 from . import config as settings
-from . import models
+from . import models, windows_storage
 from .activation import validate
 from .client import accept_export, exchange
 from .common import Rejected, atomic, canonical, command, digest, identifier, locked, no_links, private_dir, private_file, read_json, require, sha
@@ -65,8 +65,9 @@ class Controller:
         free = proof.get("free_bytes")
         require(type(free) is int and free >= 0, "worker_disk_unknown")
         worker_disk = {"free_bytes": free, "status": "blocked" if free < self.config["disk_minimum_bytes"] else "warning" if free < self.config["disk_warning_bytes"] else "ready"}
+        disks, disk_reasons = windows_storage.report(self.config, local_disk, worker_disk)
         model_status = models.ready(self.root, self.manifest["worker_image"])
-        reasons = list(model_status["reasons"])
+        reasons = list(model_status["reasons"]) + disk_reasons
         if proof.get("image") != self.manifest["worker_image"]:
             reasons.append("worker_image_mismatch")
         if proof.get("profile_revision") != self.manifest["profile_revision"] or proof.get("runtime_contract") != "2":
@@ -96,9 +97,9 @@ class Controller:
                 saved = read_json(private_file(receipt))
                 require(saved.get("cycle") == current["cycle"] and saved.get("interval") == current["interval"], "model_receipt_mismatch")
                 applied = models.pair(saved["selection"])
-        return {"ready": not reasons, "reasons": list(dict.fromkeys(reasons)), "controller_disk": local_disk,
+        return {"ready": not reasons, "reasons": list(dict.fromkeys(reasons)), **disks,
                 "model": {"selected": model_status["selected"], "applied": applied},
-                "worker_disk": worker_disk, "phase": proof.get("phase"), "auth_present": proof.get("auth_present") is True}
+                "phase": proof.get("phase"), "auth_present": proof.get("auth_present") is True}
 
     def prepare(self, request):
         require(set(request) == {"action", "context", "token"}, "invalid_prepare_request")
@@ -187,9 +188,11 @@ class Controller:
             free = proof.get("free_bytes")
             require(type(free) is int and free >= 0, "worker_disk_unknown")
             remote = {"free_bytes": free, "status": "blocked" if free < self.config["disk_minimum_bytes"] else "warning" if free < self.config["disk_warning_bytes"] else "ready"}
-            blocked = local["status"] == "blocked" or remote["status"] == "blocked"
-            return {**record, "phase": "running", "ready": not blocked, "reasons": ["disk_space_low"] if blocked else [],
-                    "controller_disk": local, "worker_disk": remote, "auth_present": proof.get("auth_present") is True}
+            disks, reasons = windows_storage.report(self.config, local, remote)
+            if local["status"] == "blocked" or remote["status"] == "blocked":
+                reasons.append("disk_space_low")
+            return {**record, "phase": "running", "ready": not reasons, "reasons": reasons,
+                    **disks, "auth_present": proof.get("auth_present") is True}
         if action == "export":
             require(proof.get("sha") == request["sha"], "export_sha_mismatch")
             path = accept_export(directory, record["generation"], proof, raw)

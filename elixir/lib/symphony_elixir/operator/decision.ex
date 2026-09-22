@@ -1,12 +1,12 @@
 defmodule SymphonyElixir.Operator.Decision do
   @moduledoc "Closed durable operator decisions. Authentication and fresh evidence belong to the controller boundary."
 
-  alias SymphonyElixir.DeliveryGate.{Budget, Command, Effects, State}
+  alias SymphonyElixir.DeliveryGate.{Budget, Command, Effects, State, StatusSync}
   alias SymphonyElixir.GitHubProjects.Delivery.QueueConfirmation
 
   @criteria ["app", "scenario", "services"]
   @restrictive ~w(pause problem cancel)
-  @actions @restrictive ++ ~w(unpause confirm_queue validate recovery resume review_resume extend_budget finish_cancel)
+  @actions @restrictive ++ ~w(unpause confirm_queue validate validation_failed review_started recheck_status recovery resume review_resume extend_budget finish_cancel)
 
   @spec actions() :: [String.t()]
   def actions, do: @actions
@@ -48,7 +48,7 @@ defmodule SymphonyElixir.Operator.Decision do
   def stopped?(nil), do: true
   def stopped?(cycle), do: Budget.stopped?(cycle["budget"]) and not Budget.unresolved?(cycle["budget"])
 
-  defp validate_data(kind, data, _, _) when kind in @restrictive or kind == "unpause",
+  defp validate_data(kind, data, _, _) when kind in @restrictive or kind in ~w(unpause review_started),
     do: if(data == %{}, do: :ok, else: {:error, :invalid_operator_data})
 
   defp validate_data("validate", data, actor, reason) do
@@ -59,6 +59,11 @@ defmodule SymphonyElixir.Operator.Decision do
 
   defp validate_data("confirm_queue", data, _, _),
     do: if(QueueConfirmation.valid_data?(data), do: :ok, else: {:error, :invalid_queue_confirmation})
+
+  defp validate_data("validation_failed", data, actor, reason),
+    do: Command.validate("validate_dev", Map.merge(data, %{"actor" => actor, "reason" => reason, "passed" => false}))
+
+  defp validate_data("recheck_status", data, _, _), do: if(map_size(data) == 1 and is_binary(data["operation_id"]), do: :ok, else: {:error, :invalid_operator_data})
 
   defp validate_data(kind, data, actor, reason) do
     command = if kind == "recovery", do: "assign_recovery", else: kind
@@ -97,6 +102,14 @@ defmodule SymphonyElixir.Operator.Decision do
   end
 
   defp decide(state, "cancel", args), do: State.apply_command(state, "request_cancel", args)
+
+  defp decide(state, "review_started", _) do
+    if state["cycle"]["phase"] == "awaiting_review" and quiet?(state["cycle"]), do: {:ok, state}, else: {:error, :review_not_ready}
+  end
+
+  defp decide(state, "validation_failed", args), do: State.apply_command(state, "validate_dev", Map.put(args, "passed", false))
+  defp decide(state, "recheck_status", args), do: StatusSync.recheck(state, args["operation_id"])
+  defp decide(%{"cycle" => %{"work" => %{"merge_sha" => sha}}} = state, "resume", args) when is_binary(sha), do: State.apply_command(state, "resume_delivery", args)
   defp decide(state, "recovery", args), do: State.apply_command(state, "assign_recovery", args)
   defp decide(state, kind, args), do: State.apply_command(state, kind, args)
 

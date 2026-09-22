@@ -5,6 +5,10 @@ PR13 connects Projects execution to a pinned, explicitly activated isolated runt
 Finite inspection remains the default. The launcher lease, worker readiness, selected model/effort
 and delivery gate must all allow a task. See the [execution guide](docs/github_projects_setup/pr13-runtime-guide.md).
 Keep machine configuration, credentials and state outside the source checkout.
+Windows release updates and the explicit schema-2 legacy journal migration are described in the
+[installer guide](../tools/wsl/README.md). The physical Windows disk measurement joins runtime
+readiness; a missing, stale or low-capacity measurement revokes worker admission without clearing
+the delivery journal, budgets or operator pauses.
 
 This directory contains the current Elixir/OTP implementation of Symphony, based on
 [`SPEC.md`](../SPEC.md) at the repository root.
@@ -51,6 +55,22 @@ change the existing trackers' in-memory scheduling and cleanup behavior.
 [Task publication](docs/github_projects_publication.md) adds session-bound Projects tools,
 a durable outbox and a controller-only Git bundle publisher. The worker exporter, external
 stop verification remain rollout prerequisites; this is not a live startup profile.
+
+[Durable status synchronization](docs/github_projects_status_sync.md) adds controller-only status
+intents to the delivery journal, separate from publication comments. It supports an explicit seven-role
+Projects mapping, readback, bounded retries, and pending/conflict details in the operator panel.
+Legacy four-role configuration and journal replay remain supported. The seven-role profile connects
+lifecycle events and adds explicit review, failed validation and status recheck actions;
+see the [second-pilot plan](docs/second_pilot_implementation_plan.md).
+Changing the mapping changes the delivery scope and requires a checked profile/store migration.
+The Windows/WSL `Select-Pilot` command uses read-only `DeliveryGate.Pilot` replay to verify
+the previous pilot before preparing a separate profile. Pending final status, active work and
+operator holds prevent switching; historical completed journals retain an explicit legacy marker.
+See the [selection runbook](../tools/wsl/README.md#первый-и-следующие-пилоты).
+The companion profile now declares all seven roles and distinguishes unavailable offline checks
+from executed failures. Its CI reads the accepted Symphony SHA from the profile lock and verifies
+the actual clean checkout. Development compatibility is explicitly unaccepted; final pins and
+installed scope migration remain rollout prerequisites. See the [stage 5 report](docs/second_pilot_stage5_report.md).
 
 The [operator dashboard](docs/operator_dashboard.md) provides local authentication and durable
 manual dev validation, pause, cancellation, recovery and additive budgets. The runbook includes

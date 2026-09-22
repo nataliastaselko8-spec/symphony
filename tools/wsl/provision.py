@@ -105,6 +105,19 @@ def claim(request):
     return {"claimed": True, "restart_required": changed, "user": user}
 
 
+def staging(request):
+    path = STAGE / request["id"]
+    if "release" in request:
+        need(re.fullmatch(r"[0-9a-f]{24}", request["release"]), "invalid_release")
+        path = path / "releases" / request["release"]
+    return path
+
+
+def host_path(request):
+    staging(request)  # Validate the optional release before constructing any path.
+    return Path("/etc/symphony/releases") / (request["release"] + ".json") if "release" in request else Path("/etc/symphony/host.json")
+
+
 def asset(request):
     name = request["asset"]
     allowed = {"controller": {"mise", "symphony", "profile", "pem"}, "worker": {"runtime", "worker_image", "windows_canary"}}
@@ -113,7 +126,8 @@ def asset(request):
          re.fullmatch(r"[0-9a-f]{64}", request["sha256"]), "invalid_asset")
     need(name != "pem" or request["size"] <= 32768, "pem_too_large")
     need(name != "windows_canary" or request["size"] <= 2 * 1024**2, "canary_too_large")
-    return STAGE / request["id"] / name
+    need("release" not in request or name != "pem", "update_preserves_credential")
+    return staging(request) / name
 
 
 def receive(request):
@@ -201,24 +215,28 @@ def controller(request):
     need(request["role"] == "controller", "controller_required")
     account = pwd.getpwnam(user)
     home = Path(account.pw_dir)
-    stage = STAGE / request["id"]
+    stage = staging(request)
+    source_home = home
+    if "release" in request:
+        source_home = home / ".local/share/symphony/releases" / request["release"]
+        run(["install", "-d", "-m", "700", str(source_home)], user=user)
     manifest = request["manifest"]
     for name, pin in (("symphony", "symphony_commit"), ("profile", "profile_revision")):
-        clone(stage / name, home / name, manifest[pin], user)
-    mise = home / ".local/bin/mise"
+        clone(stage / name, source_home / name, manifest[pin], user)
+    mise = source_home / ".local/bin/mise"
     run(["install", "-d", "-m", "700", str(mise.parent)], user=user)
     write(mise, (stage / "mise").read_bytes(), 0o700, account, immutable=True)
     for version in manifest["toolchain"].values():
         need(re.fullmatch(r"[0-9][0-9A-Za-z.+-]{1,50}", version), "invalid_toolchain")
     tools = [name + "@" + manifest["toolchain"][name] for name in ("erlang", "elixir")]
-    build_controller(stage, home, user, mise, manifest, tools)
+    build_controller(stage, source_home, user, mise, manifest, tools)
     ssh = home / ".ssh"
     run(["install", "-d", "-m", "700", str(ssh)], user=user)
     key = ssh / "management_ed25519"
     if not key.exists():
         run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], user=user)
     pub = " ".join(key.with_suffix(".pub").read_text().split()[:2])
-    return {"controller_ready": True, "public_key": pub, "home": str(home)}
+    return {"controller_ready": True, "public_key": pub, "home": str(home), "source_home": str(source_home), "mise": str(mise)}
 
 
 def controller_artifact(path, user):
@@ -295,7 +313,7 @@ def worker(request):
     need(request["role"] == "worker", "worker_required")
     manifest = request["manifest"]
     need(re.fullmatch(r"[0-9a-f]{40}", manifest["symphony_commit"]), "commit_required")
-    stage = STAGE / request["id"]
+    stage = staging(request)
     package = Path("/opt/symphony-runtime") / manifest["symphony_commit"]
     extract_runtime(stage / "runtime", package)
     with (stage / "worker_image").open("rb") as image:
@@ -314,7 +332,7 @@ def worker(request):
     host = {"package": str(package), "user": user, "image": manifest["worker_image"], "root": str(home / "state"),
             "name": "install-" + request["id"][:20], "management_port": port,
             "management_public_key": public_key(request["public_key"]).strip()}
-    write("/etc/symphony/host.json", json.dumps(host, sort_keys=True).encode(), immutable=True)
+    write(host_path(request), json.dumps(host, sort_keys=True).encode(), immutable=True)
     report = run(["python3", "-I", "-B", str(package / "scripts/host-preflight.py"), "--worker", user, "--image", manifest["worker_image"]], allowed=(0, 2))
     result = json.loads(report)
     require_preflight(result)
@@ -337,13 +355,13 @@ def require_preflight(result):
 def smoke(request):
     owned(request)
     need(request["role"] == "worker", "worker_required")
-    host = json.loads(Path("/etc/symphony/host.json").read_text())
+    host = json.loads(host_path(request).read_text())
     output = run(["python3", "-I", "-B", host["package"] + "/tests/runtime_smoke.py", "--worker", host["user"],
          "--image", host["image"], "--package", host["package"],
-         "--windows-canary", str(STAGE / request["id"] / "windows_canary")], timeout=1200)
+         "--windows-canary", str(staging(request) / "windows_canary")], timeout=1200)
     report = {"isolation_smoke": "PASS", "execution_started": False, "image": host["image"],
               "package": host["package"], "checked_at": int(time.time()), "output": output[-131072:]}
-    write(STAGE / request["id"] / "smoke-report.json", json.dumps(report).encode())
+    write(staging(request) / "smoke-report.json", json.dumps(report).encode())
     return report
 
 

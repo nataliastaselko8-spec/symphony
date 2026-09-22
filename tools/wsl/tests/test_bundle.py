@@ -24,7 +24,7 @@ class BundleTests(unittest.TestCase):
         (self.source / "runtime").mkdir()
         (self.source / "runtime/code.py").write_text("# fixture\n")
         (self.source / "tools/wsl").mkdir(parents=True)
-        for name in ("symphony.ps1", "setup.ps1", "support.ps1", "manager.ps1", "operator.ps1", "operator.py", "provision.py"):
+        for name in ("symphony.ps1", "setup.ps1", "support.ps1", "manager.ps1", "operator.ps1", "operator.py", "provision.py", "update.ps1", "update.py"):
             (self.source / "tools/wsl" / name).write_text("# " + name + "\n")
         self.commit(self.source)
         revision = b.git(self.source, "rev-parse", "HEAD").decode().strip()

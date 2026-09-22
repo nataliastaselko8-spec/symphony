@@ -118,7 +118,11 @@ defmodule SymphonyElixir.DeliveryGate.Effects do
   defp allowed_step?(cycle, _, _), do: cycle["phase"] in ~w(working reserved needs_human_decision)
 
   @spec next(map()) :: String.t() | nil
-  def next(effect), do: Enum.find(@steps[effect["kind"]], &(get_in(effect, ["steps", &1, "status"]) != "confirmed"))
+  def next(effect) do
+    steps = @steps[effect["kind"]]
+    steps = if effect["status_owner"] == "controller", do: List.delete(steps, "status"), else: steps
+    Enum.find(steps, &(get_in(effect, ["steps", &1, "status"]) != "confirmed"))
+  end
 
   @spec pending?(map()) :: boolean()
   def pending?(effect), do: not effect["cancelled"] and next(effect) != nil

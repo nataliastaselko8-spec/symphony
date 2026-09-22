@@ -9,6 +9,7 @@ VERSION = 2
 ROOT = Path(__file__).resolve().parents[2]
 PATHS = {"symphony_root", "project_template", "state_root", "workflow", "manifest", "ssh_config", "app_key", "operator_credential"}
 KEYS = PATHS | {"schema_version", "role", "profile", "runtime_kind", "controller_distro", "controller_user", "worker_distro", "worker_user", "worker_host", "management_host", "dashboard_port", "pilot_item_ids", "disk_minimum_bytes", "disk_warning_bytes", "retention_days"}
+KEYS.add("windows_installation_id")
 
 
 def default_config_path():
@@ -32,6 +33,9 @@ def resolve(raw, config_path):
     require(type(raw.get("schema_version")) is int and raw["schema_version"] in (1, VERSION), "unsupported_configuration_version")
     result = defaults(config_path)
     result.update(raw)
+    if "windows_installation_id" in result:
+        require(isinstance(result["windows_installation_id"], str) and
+                re.fullmatch(r"[0-9a-f]{32}", result["windows_installation_id"]), "invalid_windows_installation_id")
     require(result["role"] in ("inspection", "controller"), "invalid_role")
     require(result["runtime_kind"] == "wsl2-podman", "unsupported_runtime")
     ids = result["pilot_item_ids"]

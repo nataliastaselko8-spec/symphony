@@ -12,7 +12,7 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Ownership do
     with {:ok, report} <- reader.(tracker, client.opts),
          true <- report["project"]["repository_id"] == repo["node_id"],
          true <- is_list(report["items"]) do
-      rows = Enum.map(report["items"], &project_row/1)
+      rows = Enum.map(report["items"], &project_row(&1, report["schema"]))
       {:ok, %{"project_id" => report["project"]["id"], "items" => Enum.sort_by(rows, & &1["item_id"])}}
     else
       {:error, _} = error -> error
@@ -20,9 +20,10 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Ownership do
     end
   end
 
-  defp project_row(row) do
+  defp project_row(row, schema) do
     row
-    |> Map.take(~w(item_id state archived issue_state eligible))
+    |> Map.take(~w(item_id state archived issue_state eligible in_scope reasons))
+    |> Map.put("agent_allowed", schema != nil and row["native_ref"]["agent_allowed_option_id"] == schema["agent_allowed_option_id"])
     |> Map.put(
       "native_ref",
       Map.take(row["native_ref"], ~w(issue_id repo status_option_id agent_allowed_option_id))
@@ -90,7 +91,7 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Ownership do
     Enum.reduce_while(owners, {:ok, []}, fn owner, {:ok, acc} ->
       case pull(client, owner, open_prs, repo, dev) do
         {:ok, pr, reasons} ->
-          reasons = reasons ++ item_reasons(project["items"], owner["task"])
+          reasons = reasons ++ item_reasons(project["items"], owner["task"], pr)
           {:cont, {:ok, acc ++ [%{pr: pr, reasons: reasons}]}}
 
         error ->
@@ -203,13 +204,13 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Ownership do
     if pr["ancestry"] in ~w(missing changed), do: reasons ++ ["merge_ancestry_" <> pr["ancestry"]], else: reasons
   end
 
-  defp item_reasons(rows, task) do
+  defp item_reasons(rows, task, pr) do
     case Enum.filter(rows, &(&1["item_id"] == task["item_id"])) do
       [row] ->
         cond do
           row["native_ref"]["issue_id"] != task["issue_id"] -> ["owner_issue_changed"]
           row["archived"] -> ["owner_item_archived"]
-          row["issue_state"] != "OPEN" -> ["owner_issue_closed"]
+          row["issue_state"] != "OPEN" and not match?(%{"state" => "merged", "ancestry" => "included"}, pr) -> ["owner_issue_closed"]
           row["state"] == "Done" -> ["owner_item_done_requires_reconciliation"]
           true -> []
         end
@@ -220,7 +221,7 @@ defmodule SymphonyElixir.GitHubProjects.Delivery.Ownership do
   end
 
   defp blocking_items(rows, ids, settings) do
-    states = Map.take(settings.project.states, ~w(working blocked handoff)) |> Map.values()
+    states = Map.take(settings.project.states, ~w(working blocked handoff review dev_validation)) |> Map.values()
 
     Enum.flat_map(rows, fn row ->
       repo = row["native_ref"]["repo"]

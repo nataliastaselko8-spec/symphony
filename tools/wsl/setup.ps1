@@ -29,6 +29,7 @@ function Save-Installation($State, $Manifest) {
         worker_host='symphony-worker'; management_host='symphony-management'
         dashboard_port=$State.dashboard_port; pilot_item_ids=@(); retention_days=7
         disk_minimum_bytes=5368709120; disk_warning_bytes=10737418240
+        windows_installation_id=$State.id
     }
     $value = [ordered]@{
         schema_version=1; installation_id=$State.id; install_home=$State.home
@@ -85,6 +86,7 @@ if ($null -eq $state) {
     Write-Json $pointer @{home=$destination; installation=(Join-Path $destination 'installation.json')}
 } else {
     if ($state.schema_version -ne 1 -or $state.id -notmatch '^[0-9a-f]{32}$') { throw 'Invalid installer checkpoint.' }
+    if ($state.stage -eq 'update-pending') { throw 'Resume Symphony.cmd Update with the same bundle.' }
     if ($state.stage -eq 'complete') {
         Verify-Helpers $state
         Write-Host 'Already installed. Setup does not reconfigure an existing installation. Use Start, Doctor or Login.'

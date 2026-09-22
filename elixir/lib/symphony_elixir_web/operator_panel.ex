@@ -29,9 +29,19 @@ defmodule SymphonyElixirWeb.OperatorPanel do
           <% end %>
         </p>
       </div>
-      <p :for={{location, disk} <- Map.get(@model, :storage, %{})} class={if disk["status"] in ["warning", "blocked"], do: "operator-warning"}>
-        <%= if location == "controller_disk", do: "Controller", else: "Worker" %>: свободно <%= div(disk["free_bytes"] || 0, 1_073_741_824) %> GiB · <%= disk["status"] %>
+      <p :for={{location, disk} <- Map.drop(Map.get(@model, :storage, %{}), ["windows_disk"])} class={if disk["status"] in ["warning", "blocked", "unknown"], do: "operator-warning"}>
+        <%= if location == "controller_disk", do: "Controller", else: "Worker" %> · виртуальное пространство WSL: свободно <%= div(disk["free_bytes"] || 0, 1_073_741_824) %> GiB · <%= disk["status"] %>
       </p>
+      <div :if={Map.has_key?(Map.get(@model, :storage, %{}), "windows_disk")}>
+        <p class="operator-warning" :if={@model.storage["windows_disk"]["status"] in ["blocked", "unknown"]}>
+          Диск Windows: <%= @model.storage["windows_disk"]["status"] %> · <%= @model.storage["windows_disk"]["reason"] %>. Допуск закрыт.
+        </p>
+        <p :for={volume <- @model.storage["windows_disk"]["volumes"]} class={if volume["status"] in ["warning", "blocked"], do: "operator-warning"}>
+          Том Windows <code><%= volume["id"] %></code> · <%= Enum.join(volume["roles"], ", ") %>:
+          общий свободный остаток <%= div(volume["free_bytes"], 1_073_741_824) %> GiB · <%= volume["status"] %>
+        </p>
+        <p>Измерение Windows: <%= if measured = @model.storage["windows_disk"]["measured_at_ms"], do: Calendar.strftime(DateTime.from_unix!(measured, :millisecond), "%d.%m.%Y %H:%M:%S UTC"), else: "нет свежих данных" %></p>
+      </div>
       <div class="operator-toolbar">
         <button phx-click="operator_refresh" disabled={@busy}>Обновить данные</button>
         <form method="post" action="/operator/logout"><input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} /><button type="submit">Выйти</button></form>
@@ -67,6 +77,14 @@ defmodule SymphonyElixirWeb.OperatorPanel do
             <p :if={@model.age_ms && @model.age_ms >= 60_000} class="operator-warning">Наблюдение старше минуты. Перед решением нужны свежие данные.</p>
           </section>
         </div>
+        <section :if={Map.get(@model, :status_sync, []) != []} id="project-status-sync">
+          <h3>Синхронизация доски GitHub</h3>
+          <div :for={sync <- @model.status_sync}>
+            <p>Ожидаемый статус: <strong><%= sync["target"] || sync["role"] %></strong> · На доске: <%= sync["observed"] || "Ещё не подтверждён" %></p>
+            <p>Состояние синхронизации: <%= sync["status"] %><span :if={sync["error"]}> · <%= sync["error"] %></span></p>
+            <p>Подтверждено: <%= sync_time(sync["confirmed_at_ms"]) %></p>
+          </div>
+        </section>
         <section :if={@model.budget}><h3>Бюджеты</h3>
           <p>Первоначальная работа: <%= minutes(@model.budget.initial_ms) %> / <%= minutes(@model.budget.limits["initial_ms"]) %> мин.</p>
           <p>Исправления: <%= minutes(@model.budget.fix_ms) %> / <%= minutes(@model.budget.limits["fix_ms"]) %> мин.; циклы <%= @model.budget.fixes %> / <%= @model.budget.limits["fixes"] %>.</p>
@@ -87,7 +105,7 @@ defmodule SymphonyElixirWeb.OperatorPanel do
           <p>Источник: последняя сверка observer с GitHub и deployment evidence. Получено: <%= @form.observed_at || "данных пока нет" %>. В демо используются тестовые наблюдения.</p>
           <input type="hidden" name="form_id" value={@form.id} />
           <p :if={@form.action == "cancel"}>Будет запрошена остановка. PR, ветка и deployment автоматически не удаляются и не откатываются.</p>
-          <p :if={@form.action == "review_resume"}>Сначала верните карточку в Ready for agent на доске. Ветка и открытый PR сохранятся.</p>
+          <p :if={@form.action == "review_resume"}>В полном профиле controller сам обновит карточку после проверки базы, PR и разрешения. Ветка и открытый PR сохранятся.</p>
           <p :if={@form.action == "problem"}>Очередь останется закрытой. Recovery назначается отдельно.</p>
           <fieldset :if={@form.action == "confirm_queue"}><legend>Проверка dev-ресурсов в Cloudflare</legend>
             <p>Самостоятельно снимите унаследованную паузу Queue в Cloudflare и проверьте Scheduler. Эта форма сохраняет ваше свидетельство; Symphony не меняет Cloudflare.</p>
@@ -131,6 +149,9 @@ defmodule SymphonyElixirWeb.OperatorPanel do
     </section>
     """
   end
+
+  defp sync_time(nil), do: "Ожидается"
+  defp sync_time(ms), do: ms |> DateTime.from_unix!(:millisecond) |> DateTime.to_iso8601()
 
   defp minutes(value), do: Float.round(value / 60_000, 1)
 end

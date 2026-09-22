@@ -98,7 +98,9 @@ defmodule SymphonyElixir.GitHubProjects.Publication do
   end
 
   defp perform(client, _, effect, "finalize", _, _) do
-    with {:ok, _} <- WriteClient.scope(client, [client.settings.project.states["handoff"]]),
+    roles = if effect["status_owner"] == "controller", do: ~w(working handoff), else: ~w(handoff)
+
+    with {:ok, _} <- WriteClient.scope(client, Enum.map(roles, &client.settings.project.states[&1])),
          {:ok, [pr]} <- WriteClient.pulls(client),
          {:ok, proof} <- confirm_pull(client, effect, pr),
          {:ok, issue} <- WriteClient.issue(client),
