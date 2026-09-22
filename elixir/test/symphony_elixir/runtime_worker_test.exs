@@ -168,6 +168,18 @@ defmodule SymphonyElixir.RuntimeWorkerTest do
     assert Worker.status(c.worker)
   end
 
+  test "unknown physical Windows capacity revokes the active worker and projects its reason", c do
+    disk = %{"status" => "unknown", "reason" => "measurement_stale", "volumes" => [], "measured_at_ms" => nil}
+    Agent.update(c.replies, &Map.put(&1, "heartbeat", {:ok, %{"ready" => false, "reasons" => ["windows_disk_unknown"], "windows_disk" => disk}}))
+    bind(c.worker, handle())
+    assert_receive :runtime_worker_lost, 1000
+    status = Worker.status(c.worker)
+    refute status.ready
+    assert status.reasons == ["windows_disk_unknown"]
+    assert status.storage["windows_disk"] == disk
+    assert {:error, :worker_not_ready} = GenServer.call(c.worker, {:bind, handle("next")})
+  end
+
   test "transport task crash is a closed admission, not a supervisor crash", c do
     Agent.update(c.replies, &Map.put(&1, "heartbeat", fn _ -> exit(:transport_crashed) end))
     bind(c.worker, handle())

@@ -52,6 +52,17 @@ class ProvisionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "asset_not_allowed"):
                 p.asset({**self.request, "role": "worker", "asset": name, "size": 1, "sha256": "b" * 64})
 
+    def test_update_assets_and_host_configuration_use_separate_immutable_paths(self):
+        request = {**self.request, "release": "b" * 24, "asset": "mise", "size": 1, "sha256": "c" * 64}
+        self.assertEqual(p.asset(request), p.STAGE / self.request["id"] / "releases" / ("b" * 24) / "mise")
+        self.assertEqual(p.host_path(request), Path("/etc/symphony/releases") / ("b" * 24 + ".json"))
+        self.assertEqual(p.host_path(self.request), Path("/etc/symphony/host.json"))
+        for release in ("../other", "/root", "A" * 24):
+            with self.assertRaisesRegex(ValueError, "invalid_release"):
+                p.asset({**request, "release": release})
+        with self.assertRaisesRegex(ValueError, "preserves_credential"):
+            p.asset({**request, "asset": "pem"})
+
     def test_preflight_reports_only_bounded_reason_codes(self):
         p.require_preflight({'host_prerequisites_ready': True})
         for reason, expected in (('missing_podman', 'host_preflight_podman_missing_podman'),

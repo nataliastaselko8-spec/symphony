@@ -143,19 +143,24 @@ defmodule SymphonyElixir.GitHubProjects.Settings do
   defp valid_fields?(_fields), do: false
 
   defp valid_states?(states, active, terminal) when is_map(states) do
-    roles = Enum.map(["ready", "working", "blocked", "handoff"], &states[&1])
+    required = ~w(ready working blocked handoff)
+    extended = ~w(review dev_validation production_ready)
+    keys = Map.keys(states) |> Enum.sort()
+    roles = Map.values(states)
 
-    nonempty_string_list?(active) and nonempty_string_list?(terminal) and
+    keys in [Enum.sort(required), Enum.sort(required ++ extended)] and
+      nonempty_string_list?(active) and nonempty_string_list?(terminal) and
       valid_roles?(roles) and
       Enum.all?([states["ready"], states["working"]], &(&1 in active)) and
       Enum.all?([states["blocked"], states["handoff"]], &(&1 not in active and &1 not in terminal)) and
-      Enum.all?(active, &(&1 not in terminal))
+      Enum.all?(active, &(&1 not in terminal)) and inactive_roles?(Map.take(states, extended), active ++ terminal)
   end
 
   defp valid_states?(_states, _active, _terminal), do: false
+  defp inactive_roles?(states, disallowed), do: Enum.all?(states, fn {_, name} -> name not in disallowed end)
 
   defp nonempty_string_list?(list), do: string_list?(list) and list != []
-  defp valid_roles?(roles), do: Enum.all?(roles, &present?/1) and length(Enum.uniq(roles)) == 4
+  defp valid_roles?(roles), do: Enum.all?(roles, &present?/1) and length(Enum.uniq(roles)) == length(roles)
 
   defp valid_optional_list?(provider, key) do
     not Map.has_key?(provider, key) or string_list?(provider[key])

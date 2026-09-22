@@ -60,7 +60,7 @@ def create(args):
     assets["runtime"] = {"file": target.name, "sha256": hash_file(target), "size": target.stat().st_size}
     # The same reviewed Windows/Linux installer is used on every computer.
     installer = {}
-    for name in ("symphony.ps1", "setup.ps1", "support.ps1", "manager.ps1", "operator.ps1", "operator.py", "provision.py"):
+    for name in ("symphony.ps1", "setup.ps1", "support.ps1", "manager.ps1", "operator.ps1", "operator.py", "provision.py", "update.ps1", "update.py"):
         raw = git(source, "show", args.symphony_commit + ":tools/wsl/" + name)
         installer[name] = hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest()
     # Record the OCI/Docker archive's content hash; target Podman verifies the actual

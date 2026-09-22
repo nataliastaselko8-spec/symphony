@@ -86,6 +86,31 @@ class ControllerTest(unittest.TestCase):
                 self.assertNotIn(b"fixture-secret", file.read_bytes())
         self.assertEqual(self.prepare()["phase"], "prepared")
 
+    def test_windows_capacity_blocks_admission_and_active_heartbeat_without_losing_owner(self):
+        from symphony_runtime import windows_storage
+        self.config["windows_installation_id"] = "a" * 32
+        self.assertIn("windows_disk_unknown", self.ctl.ready()["reasons"])
+        with self.assertRaisesRegex(Rejected, "worker_not_ready"):
+            self.prepare()
+        root = Path(self.config["state_root"])
+        atomic(root / "launcher.json", canonical({"token": "fixture"}))
+        frame = {"schema_version": 1, "installation_id": "a" * 32, "manager_token": "b" * 32,
+                 "measured_at_ms": int(time.time() * 1000), "disks": {
+                     role: {"distro": None, "volume": "volume:12345678-1234-1234-1234-123456789abc",
+                            "free_bytes": 100 * GIB, "error": None} for role in ("controller", "worker")}}
+        windows_storage.retain(frame, self.config, "b" * 32, "fixture")
+        self.prepare()
+        self.operation("start", active_ms=120000)
+        saved = (root / "worker.json").read_bytes()
+        frame["disks"]["worker"]["free_bytes"] = 2 * GIB
+        windows_storage.retain(frame, self.config, "b" * 32, "fixture")
+        health = self.operation("heartbeat")
+        self.assertFalse(health["ready"])
+        self.assertIn("windows_disk_space_low", health["reasons"])
+        self.operation("stop")
+        self.assertEqual((root / "worker.json").read_bytes(), saved)
+        self.assertTrue((root / "bindings/interval.json").exists())
+
     def test_start_binds_pinned_ssh_and_remaining_budget_and_stop_revokes_endpoint(self):
         self.prepare()
         result = self.operation("start", active_ms=20100)

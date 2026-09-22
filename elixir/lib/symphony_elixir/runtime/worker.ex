@@ -285,7 +285,7 @@ defmodule SymphonyElixir.Runtime.Worker do
     %{
       ready: proof["ready"] == true,
       reasons: proof["reasons"] || [],
-      storage: Map.take(proof, ~w(controller_disk worker_disk)),
+      storage: Map.take(proof, ~w(controller_disk worker_disk windows_disk)),
       auth_present: proof["auth_present"],
       model: proof["model"] || Map.get(previous, :model, %{})
     }

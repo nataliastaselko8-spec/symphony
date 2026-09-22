@@ -14,7 +14,7 @@ defmodule SymphonyElixir.DeliveryGate do
 
   alias SymphonyElixir.DeliveryGate.{Budget, Settings, Snapshot, State, Store}
 
-  @recovery_commands ~w(checkpoint stop_work resolve_interval observe_ci external_ci block request_cancel confirm_ci_not_started effect_request effect_submit effect_sent effect_confirm effect_candidate bind_pr manual_ci)
+  @recovery_commands ~w(checkpoint stop_work resolve_interval observe_ci external_ci block request_cancel confirm_ci_not_started effect_request effect_submit effect_sent effect_confirm effect_candidate bind_pr manual_ci status_result)
   @storage_errors [:store_changed, :store_unavailable, :store_operation_failed, :store_timeout]
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -42,9 +42,9 @@ defmodule SymphonyElixir.DeliveryGate do
   def admission(server, version, item), do: GenServer.call(server, {:admission, version, item})
 
   @doc "Commit an interval before granting one registered, inert worker permission to activate."
-  @spec begin_work(GenServer.server(), map(), String.t(), String.t(), String.t(), pid()) :: {:ok, map()} | {:error, atom()}
-  def begin_work(server, version, item, interval, budget, pid),
-    do: GenServer.call(server, {:begin_work, version, item, interval, budget, pid}, 15_000)
+  @spec begin_work(GenServer.server(), map(), String.t(), String.t(), String.t(), pid(), map() | nil) :: {:ok, map()} | {:error, atom()}
+  def begin_work(server, version, item, interval, budget, pid, sync \\ nil),
+    do: GenServer.call(server, {:begin_work, version, item, interval, budget, pid, sync}, 15_000)
 
   @spec worker_check(GenServer.server(), reference(), :activate | :continue) :: :ok | {:error, atom()}
   def worker_check(server, nonce, mode), do: GenServer.call(server, {:worker_check, nonce, mode})
@@ -89,13 +89,15 @@ defmodule SymphonyElixir.DeliveryGate do
     {:reply, reply, next}
   end
 
-  def handle_call({:begin_work, version, item, interval, budget, pid}, _from, state) do
+  def handle_call({:begin_work, version, item, interval, budget, pid, sync}, _from, state) do
     args = %{"interval_id" => interval, "budget" => budget}
+    {action, args} = if sync, do: {"lifecycle", Map.merge(sync, %{"action" => "start_work", "args" => args})}, else: {"start_work", args}
 
     with true <- is_binary(interval) and is_pid(pid) and node(pid) == node() and Process.alive?(pid),
          :ok <- check_admission(state, version, item),
          {:ok, candidate, :new} <-
-           Snapshot.append(state.snapshot, "work-" <> interval, version.revision, "start_work", args, System.system_time(:millisecond)),
+           Snapshot.append(state.snapshot, "work-" <> interval, version.revision, action, args, System.system_time(:millisecond)),
+         :ok <- command_allowed(state, action, args, :new),
          true <- candidate["state"]["cycle"]["phase"] == "working" do
       case persist_command(state, candidate, :new) do
         {:reply, {:ok, receipt}, next} ->
@@ -194,6 +196,10 @@ defmodule SymphonyElixir.DeliveryGate do
   defp command_allowed(%{mode: mode}, _, _, _) when mode in [:store_unavailable, :recovery_required], do: {:error, mode}
   defp command_allowed(_, _, _, :replayed), do: :ok
 
+  defp command_allowed(state, action, args, result) when action in ~w(status_transition lifecycle) do
+    if String.downcase(args["repo"]) == String.downcase(state.settings.scope["repo"]), do: command_allowed(state, args["action"], args["args"], result), else: {:error, :status_scope_changed}
+  end
+
   defp command_allowed(state, "operator_decision", args, _) do
     if Decision.restrictive?(args["kind"]) do
       :ok
@@ -207,7 +213,7 @@ defmodule SymphonyElixir.DeliveryGate do
   defp command_allowed(state, action, args, _) do
     with :ok <- reconciled(state),
          :ok <- if(action == "start_work", do: validated_base(state), else: :ok) do
-      if action in ~w(bootstrap reserve merged deployment validate_dev complete finish_cancel assign_recovery finish_recovery resume review_resume) and
+      if action in ~w(bootstrap reserve merged deployment validate_dev complete finish_cancel assign_recovery finish_recovery resume resume_delivery review_resume) and
            args["sha"] != state.verified_sha do
         {:error, :observation_sha_changed}
       else
@@ -312,5 +318,13 @@ defmodule SymphonyElixir.DeliveryGate do
   end
 
   defp decisions_list(%{snapshot: nil}), do: []
-  defp decisions_list(state), do: Enum.filter(state.snapshot["commands"], &(&1["action"] == "operator_decision"))
+
+  defp decisions_list(state) do
+    state.snapshot["commands"]
+    |> Enum.map(fn
+      %{"action" => "lifecycle", "args" => %{"action" => "operator_decision", "args" => args}} = entry -> %{entry | "action" => "operator_decision", "args" => args}
+      entry -> entry
+    end)
+    |> Enum.filter(&(&1["action"] == "operator_decision"))
+  end
 end

@@ -22,6 +22,16 @@ def current_group():
     return rows[0][3:]
 
 
+def retained_payload(value, current):
+    """Validate a previous payload without assuming WSL kept its distro prefix."""
+    require(isinstance(value, str), "invalid_recorded_cgroup")
+    path = PurePosixPath(value)
+    require(str(path) == value and path.parent.name == "payload" and
+            re.fullmatch(r"libpod-[0-9a-f]{64}", path.name), "invalid_recorded_cgroup")
+    service_group(str(path.parent.parent), PurePosixPath(service_group(current)).name)
+    return value
+
+
 def resources(group):
     path = Path("/sys/fs/cgroup") / service_group(group).lstrip("/")
     controllers = set((path / "cgroup.controllers").read_text().split())

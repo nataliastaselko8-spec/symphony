@@ -193,6 +193,23 @@ defmodule SymphonyElixir.DeliveryObserverTest do
     end
   end
 
+  test "a closed owned issue needs assigned merged ancestry; historical cards never claim an unrelated PR", %{f: f, cache: cache} do
+    row = %{F.item() | "issue_state" => "CLOSED"}
+    pr = Map.merge(F.pr(), %{"state" => "closed", "merged" => true, "merge_commit_sha" => F.sha("c")})
+    client = F.client(Map.put(f, :pr, pr), cache)
+    project = %{"items" => [row]}
+    {:ok, facts, reasons} = Ownership.observe(client, context(Gate.merged()), project, [], F.repo(), F.sha("c"))
+    assert facts["pr"]["state"] == "merged"
+    refute "owner_issue_closed" in reasons
+    {:ok, _, reasons} = Ownership.observe(client, context(Gate.initial()), project, [], F.repo(), F.sha("c"))
+    assert "owner_issue_closed" in reasons
+    historical = %{row | "state" => "Ready for production"}
+    {:ok, facts, reasons} = Ownership.observe(client, context(Gate.apply!(Gate.ready(), "complete", Gate.proof("c"))), %{"items" => [historical]}, [F.pr()], F.repo(), F.sha("c"))
+    assert facts["pr"] == nil and facts["task"] == nil
+    assert facts["open_pr_numbers"] == [7]
+    refute "unowned_delivery_item" in reasons
+  end
+
   test "squash merge ancestry uses merge result and detects removed or replaced merge", %{f: f, cache: cache} do
     pr = Map.merge(F.pr(), %{"state" => "closed", "merged" => true})
     f = Map.put(f, :pr, pr)

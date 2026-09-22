@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position=0)]
-    [ValidateSet('Setup','Start','Stop','Status','Doctor','Check','Login','Models','Select-Model','Select-Pilot','Token','Open')]
+    [ValidateSet('Setup','Update','Rollback-Update','Start','Stop','Status','Doctor','Check','Login','Models','Select-Model','Select-Pilot','Token','Open')]
     [string]$Action = 'Status',
     [string]$Installation, [string]$Bundle, [string]$BundleSha256, [string]$InstallRoot,
     [string]$Model, [string]$Effort, [switch]$SkipLogin, [int]$Issue, [switch]$Execute
@@ -15,45 +15,57 @@ if ($Action -eq 'Setup') {
     & (Join-Path $PSScriptRoot 'setup.ps1') -Bundle $Bundle -BundleSha256 $BundleSha256 -InstallRoot $InstallRoot -SkipLogin:$SkipLogin
     return
 }
+if ($Action -in @('Update','Rollback-Update')) {
+    if ($InstallRoot -or $SkipLogin) { throw 'InstallRoot and SkipLogin are only allowed with Setup.' }
+    & (Join-Path $PSScriptRoot 'update.ps1') -Installation $Installation -Bundle $Bundle -BundleSha256 $BundleSha256 -Rollback:($Action -eq 'Rollback-Update')
+    return
+}
 if ($Bundle -or $BundleSha256 -or $InstallRoot -or $SkipLogin) { throw 'Setup options are only allowed with Setup.' }
 $Installation = Get-InstallationFile $Installation
 $data = Read-Json $Installation
 if ($data.installation_id -notmatch '^[0-9a-f]{32}$' -or [IO.Path]::GetFullPath($Installation) -ine (Join-Path $data.install_home 'installation.json')) {
     throw 'Run the full installer. Legacy machine descriptors are not imported.'
 }
-$operator = Join-Path $data.install_home 'installer/operator.ps1'
 $state = Read-Json (Join-Path $data.install_home 'setup.json')
+$operator = Join-Path (Get-HelperRoot $state) 'operator.ps1'
 if ($state.id -cne $data.installation_id -or $state.home -ine $data.install_home) { throw 'Installation scope mismatch.' }
 Verify-Helpers $state
+if (($state.stage -eq 'update-pending' -or (Test-Path -LiteralPath (Join-Path $data.install_home 'update.pending.json')) -or (Test-Path -LiteralPath (Join-Path $data.install_home 'rollback.pending.json'))) -and $Action -notin @('Stop','Status','Doctor')) { throw 'Finish the pending Update before using this installation.' }
 $manager = Get-Manager $data
 $recordPath = Join-Path $data.install_home 'manager.json'
 $url = 'http://localhost:' + $data.runtime_config.dashboard_port
 if ($Action -eq 'Select-Pilot') {
     if ($state.stage -ne 'complete') { throw 'Finish Setup before selecting a pilot.' }
-    if ($null -ne $manager -or -not (Test-Path -LiteralPath $recordPath) -or (Read-Json $recordPath).stopped -ne $true) { throw 'Run Symphony.cmd Stop before selecting a pilot.' }
+    $lockedId = $data.installation_id
+    $lockedHome = $data.install_home
     $selectionLock = Enter-InstallationLock $data.installation_id
     try {
+        # Read again under the same lock as manager; the descriptor may have changed before acquisition.
+        $data = Read-Json $Installation
+        if ($data.installation_id -cne $lockedId -or $data.install_home -ine $lockedHome) { throw 'Installation identity changed; retry selection.' }
+        $manager = Get-Manager $data
+        if ($null -ne $manager -or -not (Test-Path -LiteralPath $recordPath) -or (Read-Json $recordPath).stopped -ne $true) { throw 'Run Symphony.cmd Stop before selecting a pilot.' }
+        $pending = Join-Path $data.install_home 'pilot-selection.pending.json'
+        if (Test-Path -LiteralPath $pending) {
+            $transition = Read-Json $pending
+            if ($transition.after.pilot.issue -ne $Issue -or
+                -not ((Same-Json $data $transition.before) -or (Same-Json $data $transition.after))) {
+                throw 'Finish the pending Select-Pilot transition before selecting another issue.'
+            }
+        }
         $result = (& $operator Select-Pilot -Installation $Installation -Issue $Issue | Out-String) | ConvertFrom-Json
         $proposed = $result.installation
         if ($result.execution_started -ne $false -or $proposed.installation_id -cne $data.installation_id -or
             $proposed.install_home -ine $data.install_home -or @($proposed.runtime_config.pilot_item_ids).Count -ne 1 -or
             $proposed.pilot.issue -ne $Issue -or $proposed.runtime_config.pilot_item_ids[0] -cne $proposed.pilot.item_id) { throw 'Invalid pilot selection result; descriptor was preserved.' }
-        $before = Canonical-Value $data | ConvertTo-Json -Depth 40 -Compress
-        $after = Canonical-Value $proposed | ConvertTo-Json -Depth 40 -Compress
-        if ($before -cne $after) {
-            $backup = Join-Path $data.install_home 'installation.before-pilot.json'
-            if (Test-Path -LiteralPath $backup) {
-                if ((Canonical-Value (Read-Json $backup) | ConvertTo-Json -Depth 40 -Compress) -cne $before) { throw 'Previous pilot backup belongs to another configuration.' }
-            } else { Write-Json $backup $data }
-            # Publish the descriptor only after all immutable Linux files have been verified.
-            Write-Json $Installation $proposed
-        }
+        Publish-PilotSelection $Installation $data $proposed $Issue
         Write-Host ('Pilot selected: ' + $proposed.pilot.repo + ' #' + $Issue)
         Write-Host 'No task started. Previous profile preserved. Run Symphony.cmd Start -Execute, then confirm the dev baseline in the dashboard.'
     } finally { $selectionLock.ReleaseMutex(); $selectionLock.Dispose() }
     return
 }
 if ($Action -in @('Start','Open')) {
+    if (Test-Path -LiteralPath (Join-Path $data.install_home 'pilot-selection.pending.json')) { throw 'Finish the pending Select-Pilot command before Start.' }
     $startedManager = $null
     if ($state.stage -ne 'complete') { throw ('Finish Setup first. Last stage: ' + $state.stage) }
     if ($Action -eq 'Open' -and $null -eq $manager) { throw 'Dashboard is stopped. Use Symphony.cmd Start.' }
@@ -64,7 +76,7 @@ if ($Action -in @('Start','Open')) {
         if ((Test-Path -LiteralPath $recordPath) -and -not (Read-Json $recordPath).stopped) { throw 'The previous stop is unconfirmed. Run Stop to reconcile it, then Start.' }
         $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, [int]$data.runtime_config.dashboard_port)
         try { $listener.Start() } finally { $listener.Stop() }
-        $file = Join-Path $data.install_home 'installer/manager.ps1'
+        $file = Join-Path (Get-HelperRoot $state) 'manager.ps1'
         $powershell = Join-Path $env:WINDIR 'System32/WindowsPowerShell/v1.0/powershell.exe'
         $arguments = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$file,'-Installation',$Installation)
         if ($Execute) { $arguments += '-Execute' }

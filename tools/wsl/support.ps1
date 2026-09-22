@@ -22,11 +22,72 @@ function Canonical-Value($Value) {
     }
     if ($Value -is [pscustomobject]) {
         $result = [ordered]@{}
-        foreach ($name in @($Value.PSObject.Properties.Name | Sort-Object)) { $result[$name] = Canonical-Value $Value.$name }
+        foreach ($property in @($Value.PSObject.Properties | Sort-Object Name)) { $result[$property.Name] = Canonical-Value $property.Value }
         return $result
     }
     if ($Value -is [array]) { return ,@($Value | ForEach-Object { Canonical-Value $_ }) }
     return $Value
+}
+function Same-Json($Left, $Right) {
+    return (Canonical-Value $Left | ConvertTo-Json -Depth 40 -Compress) -ceq (Canonical-Value $Right | ConvertTo-Json -Depth 40 -Compress)
+}
+function Assert-PilotTransition($Before, $After, [int]$Issue) {
+    if ($After.installation_id -cne $Before.installation_id -or $After.install_home -ine $Before.install_home -or
+        @($After.runtime_config.pilot_item_ids).Count -ne 1 -or $After.pilot.issue -ne $Issue -or
+        $After.runtime_config.pilot_item_ids[0] -cne $After.pilot.item_id -or $After.pilot.transition_id -cnotmatch '^[0-9a-f]{24}$') {
+        throw 'Invalid pilot selection result; descriptor was preserved.'
+    }
+    # The helper may change only the selected profile and its appended history.
+    $stable = Canonical-Value $Before
+    $expected = Canonical-Value $After
+    foreach ($key in @('controller','runtime_config','pilot','pilot_history')) { $stable.Remove($key); $expected.Remove($key) }
+    if (-not (Same-Json $stable $expected)) { throw 'Pilot selection changed installation identity or credentials.' }
+    foreach ($section in @('controller','runtime_config')) {
+        $left = Canonical-Value $Before.$section
+        $right = Canonical-Value $After.$section
+        $mutable = if ($section -eq 'controller') { @('config') } else { @('pilot_item_ids','profile','state_root','workflow','manifest') }
+        foreach ($key in $mutable) { $left.Remove($key); $right.Remove($key) }
+        if (-not (Same-Json $left $right)) { throw 'Pilot selection changed runtime contract or controller host.' }
+    }
+    $history = @()
+    if ($Before.PSObject.Properties['pilot_history']) { $history = @($Before.pilot_history) }
+    $updated = @($After.pilot_history)
+    if ($updated.Count -ne $history.Count + 1) { throw 'Pilot history must append one transition.' }
+    for ($index = 0; $index -lt $history.Count; $index++) {
+        if (-not (Same-Json $history[$index] $updated[$index])) { throw 'Previous pilot history changed.' }
+    }
+    $entry = $updated[-1]
+    if ($entry.id -cne $After.pilot.transition_id -or $entry.source_config -cne $Before.controller.config -or
+        $entry.target_config -cne $After.controller.config -or $entry.target_issue -ne $Issue -or
+        $After.controller.config -ceq $Before.controller.config -or $After.runtime_config.state_root -ceq $Before.runtime_config.state_root) {
+        throw 'Pilot transition does not match its profiles.'
+    }
+}
+function Publish-PilotSelection([string]$Installation, $Before, $After, [int]$Issue) {
+    $pending = Join-Path $Before.install_home 'pilot-selection.pending.json'
+    $record = $null
+    if (Test-Path -LiteralPath $pending) {
+        $record = Read-Json $pending
+        Assert-PilotTransition $record.before $record.after $Issue
+        if ($record.schema_version -ne 1 -or -not (Same-Json $record.after $After) -or
+            -not ((Same-Json $Before $record.before) -or (Same-Json $Before $record.after))) {
+            throw 'Pending pilot selection differs; active descriptor was preserved.'
+        }
+    } elseif (Same-Json $Before $After) { return }
+    else {
+        Assert-PilotTransition $Before $After $Issue
+        $record = @{schema_version=1; before=$Before; after=$After}
+        Write-Json $pending $record
+    }
+    $directory = New-PrivateDirectory (Join-Path $Before.install_home 'pilot-history')
+    $file = Join-Path $directory ($After.pilot.transition_id + '.json')
+    if (Test-Path -LiteralPath $file) {
+        if (-not (Same-Json (Read-Json $file) $record)) { throw 'Saved pilot transition differs.' }
+    } else { Write-Json $file $record }
+    $legacy = Join-Path $Before.install_home 'installation.before-pilot.json'
+    if (-not (Test-Path -LiteralPath $legacy)) { Write-Json $legacy $record.before }
+    if (-not (Same-Json $Before $After)) { Write-Json $Installation $After }
+    [IO.File]::Delete($pending)
 }
 function New-PrivateDirectory([string]$Path) {
     $full = [IO.Path]::GetFullPath($Path)
@@ -74,7 +135,19 @@ function New-NativeProcess([string]$File, [string[]]$Arguments, [switch]$Redirec
     $info.RedirectStandardError = [bool]$Redirect
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $info
-    if (-not $process.Start()) { throw 'Process did not start.' }
+    # .NET Framework inherits Console.InputEncoding for the redirected writer.
+    # Its UTF-8 preamble would be emitted before even a BaseStream binary copy.
+    $encoding = New-Object Text.UTF8Encoding($false)
+    if ($info.PSObject.Properties['StandardInputEncoding']) {
+        $info.StandardInputEncoding = $encoding
+        if (-not $process.Start()) { throw 'Process did not start.' }
+    } else {
+        $previousEncoding = [Console]::InputEncoding
+        try {
+            [Console]::InputEncoding = $encoding
+            if (-not $process.Start()) { throw 'Process did not start.' }
+        } finally { [Console]::InputEncoding = $previousEncoding }
+    }
     return $process
 }
 function Invoke-Native([string]$File, [string[]]$Arguments, [string]$InputFile, [int]$TimeoutSeconds = 3600) {
@@ -119,6 +192,7 @@ function Wsl-Path {
 }
 function Invoke-Provision($State, [string]$Role, [string]$Action, [hashtable]$Extra = @{}, [string]$InputFile) {
     $request = @{id=$State.id; role=$Role; action=$Action}
+    if ($State.PSObject.Properties['release']) { $request.release = $State.release }
     foreach ($key in $Extra.Keys) { $request[$key] = $Extra[$key] }
     $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($request | ConvertTo-Json -Depth 40 -Compress)))
     $memory = New-Object IO.MemoryStream
@@ -149,7 +223,7 @@ function Read-Bundle([string]$Path, [string]$ExpectedHash) {
         $item = Get-Item -LiteralPath $file
         if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint -or $item.Length -ne $asset.size -or (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ine $asset.sha256) { throw ('Asset checksum mismatch: ' + $name) }
     }
-    foreach ($name in @('symphony.ps1','setup.ps1','support.ps1','manager.ps1','operator.ps1','operator.py','provision.py')) {
+    foreach ($name in (Get-HelperNames $manifest.installer)) {
         $raw = [Text.Encoding]::UTF8.GetBytes([IO.File]::ReadAllText((Join-Path $PSScriptRoot $name)).Replace("`r`n", "`n"))
         $hash = [Security.Cryptography.SHA256]::Create()
         try { $actual = ([BitConverter]::ToString($hash.ComputeHash($raw))).Replace('-','').ToLowerInvariant() } finally { $hash.Dispose() }
@@ -169,6 +243,57 @@ function Get-RegisteredDistro([string]$Name) {
         if ($value.DistributionName -ieq $Name) { return $value }
     }
     return $null
+}
+function Get-WindowsVolume([string]$Path) {
+    if (-not ('SymphonyWindowsVolumes' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class SymphonyWindowsVolumes {
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern bool GetVolumePathName(string file, StringBuilder path, uint size);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern bool GetVolumeNameForVolumeMountPoint(string path, StringBuilder name, uint size);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  public static extern bool GetDiskFreeSpaceEx(string path, out ulong available, out ulong total, out ulong free);
+}
+'@
+    }
+    $mount = New-Object Text.StringBuilder 1024
+    $volume = New-Object Text.StringBuilder 1024
+    [UInt64]$available = 0; [UInt64]$total = 0; [UInt64]$free = 0
+    if (-not [SymphonyWindowsVolumes]::GetVolumePathName($Path, $mount, 1024) -or
+        -not [SymphonyWindowsVolumes]::GetVolumeNameForVolumeMountPoint($mount.ToString(), $volume, 1024) -or
+        -not [SymphonyWindowsVolumes]::GetDiskFreeSpaceEx($mount.ToString(), [ref]$available, [ref]$total, [ref]$free)) {
+        throw 'windows_volume_measurement_unavailable'
+    }
+    $match = [regex]::Match($volume.ToString(), '\{([0-9a-fA-F-]{36})\}')
+    if (-not $match.Success -or $available -gt [Int64]::MaxValue) { throw 'windows_volume_identity_invalid' }
+    return @{volume=('volume:' + $match.Groups[1].Value.ToLowerInvariant()); free_bytes=[Int64]$available}
+}
+function Get-WindowsStorageFrame($Data, [string]$ManagerToken) {
+    if ($Data.installation_id -notmatch '^[0-9a-f]{32}$' -or $ManagerToken -notmatch '^[0-9a-f]{32}$') { throw 'windows_disk_identity_invalid' }
+    $disks = @{}
+    foreach ($role in @('controller','worker')) {
+        $distro = $Data.$role.distro
+        $disk = @{distro=$distro; volume=$null; free_bytes=$null; error='measurement_unavailable'}
+        try {
+            $registered = Get-RegisteredDistro $distro
+            if ($null -eq $registered -or $registered.Version -ne 2) { throw 'windows_disk_registration_missing' }
+            $basePath = [Environment]::ExpandEnvironmentVariables($registered.BasePath)
+            $vhd = 'ext4.vhdx'
+            if ($registered.PSObject.Properties.Name -contains 'VhdFileName' -and $registered.VhdFileName) { $vhd = $registered.VhdFileName }
+            if ([IO.Path]::GetFileName($vhd) -cne $vhd -or $vhd -in @('.','..')) { throw 'windows_disk_filename_invalid' }
+            $file = Join-Path $basePath $vhd
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw 'windows_disk_file_missing' }
+            $measurement = Get-WindowsVolume $file
+            $disk.volume = $measurement.volume; $disk.free_bytes = $measurement.free_bytes; $disk.error = $null
+        } catch { }
+        $disks[$role] = $disk
+    }
+    return @{schema_version=1; installation_id=$Data.installation_id; manager_token=$ManagerToken;
+             measured_at_ms=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); disks=$disks}
 }
 function Ensure-Distro($State, [string]$Role, [string]$Rootfs) {
     $name = $State.distros.$Role
@@ -221,9 +346,22 @@ function Enter-InstallationLock([string]$Id) {
         return $mutex
     } catch { $mutex.Dispose(); throw }
 }
+function Get-HelperNames($Helpers) {
+    $names = @('symphony.ps1','setup.ps1','support.ps1','manager.ps1','operator.ps1','operator.py','provision.py')
+    if ($Helpers.PSObject.Properties['update.ps1'] -or $Helpers.PSObject.Properties['update.py']) { $names += @('update.ps1','update.py') }
+    if (@(Compare-Object ($names | Sort-Object) ($Helpers.PSObject.Properties.Name | Sort-Object)).Count) { throw 'Unknown or incomplete installer helper set.' }
+    return $names
+}
+function Get-HelperRoot($State) {
+    if (-not $State.PSObject.Properties['helper_root']) { return (Join-Path $State.home 'installer') }
+    $root = [IO.Path]::GetFullPath($State.helper_root)
+    $parent = Join-Path $State.home 'installer-releases'
+    if ([IO.Path]::GetDirectoryName($root) -ine $parent -or [IO.Path]::GetFileName($root) -notmatch '^[0-9a-f]{24}$') { throw 'Invalid versioned helper directory.' }
+    return $root
+}
 function Verify-Helpers($State) {
-    foreach ($name in @('symphony.ps1','setup.ps1','support.ps1','manager.ps1','operator.ps1','operator.py','provision.py')) {
-        $target = Join-Path $State.home ('installer/' + $name)
+    foreach ($name in (Get-HelperNames $State.helpers)) {
+        $target = Join-Path (Get-HelperRoot $State) $name
         if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ine $State.helpers.$name) { throw ('Installed helper checksum mismatch: ' + $name) }
     }
 }

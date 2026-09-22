@@ -13,6 +13,15 @@
 # One pilot, local model/effort selection and preserved work: docs/github_projects_setup/pr13-runtime-guide.md.
 # Session-bound task tools and controller publication: docs/github_projects_publication.md.
 # project_handoff submits retained intent; only verified CI permits PR ready. Merge stays with the operator.
+# Controller-only durable status intents and optional seven-role mapping: docs/github_projects_status_sync.md.
+# Seven-role profiles enable lifecycle status sync and explicit review/validation actions. Legacy four-role defaults remain unchanged.
+# Installed profile/pins and scope migration must be updated separately before running the next pilot.
+# Select-Pilot verifies completion with the previous workflow/scope and prepares a separate state root.
+# Previous dev validation is not inherited; see ../tools/wsl/README.md for resumable selection and history.
+# Companion profile alignment and offline diagnostics: docs/second_pilot_stage5_report.md.
+# Missing offline dependencies are explicit skips; executed failures remain failures. Exact-SHA hosted CI gates PR ready.
+# Windows Update prepares a separate release and a replayable schema-2 journal; legacy completion never writes GitHub retroactively.
+# Manager-bound physical Windows disk evidence is mandatory for installed Windows admission; see ../tools/wsl/README.md.
 # Optional server.operator: {principal: local:OWNER, credential_path: /home/CONTROLLER/private/login-token}.
 # Requires explicit server.host loopback and server.port; see docs/operator_dashboard.md for setup/demo.
 # Inherited Queue pause requires separate operator confirmation, then dev validation within 30 minutes.

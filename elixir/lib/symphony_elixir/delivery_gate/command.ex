@@ -8,7 +8,7 @@ defmodule SymphonyElixir.DeliveryGate.Command do
   controller, never by worker tool arguments. No public endpoint is provided.
   """
 
-  alias SymphonyElixir.DeliveryGate.Effects
+  alias SymphonyElixir.DeliveryGate.{Effects, Lifecycle, StatusSync}
 
   @proof [sha: :sha, workflow_id: :positive, run_id: :positive, run_attempt: :positive]
   @operator [actor: :text, reason: :text]
@@ -44,11 +44,14 @@ defmodule SymphonyElixir.DeliveryGate.Command do
     "finish_recovery" => @proof,
     "extend_budget" => @operator ++ @limits,
     "resume" => @operator ++ [sha: :sha],
+    "resume_delivery" => @operator ++ [sha: :sha],
     "review_resume" => @operator ++ @limits ++ [sha: :sha, head_sha: :sha, pr_number: :positive]
   }
 
   @spec validate(String.t(), map()) :: :ok | {:error, atom()}
   def validate("operator_decision", args), do: Decision.validate(args)
+  def validate("lifecycle", args), do: Lifecycle.validate(args)
+  def validate(action, args) when action in ~w(status_transition status_result), do: StatusSync.validate(action, args)
 
   def validate(action, args) when action in ~w(effect_request effect_submit effect_sent effect_confirm effect_candidate),
     do: Effects.validate(action, args)

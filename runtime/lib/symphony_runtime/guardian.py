@@ -14,7 +14,7 @@ import uuid
 from .common import Rejected, atomic, canonical, command, digest, identifier, lease_clock, locked, no_links, parse_json, private_dir, private_file, read_json, require, sha
 from .storage import capacity, collect, retire
 from .images import collect_images, register
-from .cgroups import service_group, current_group, resources
+from .cgroups import service_group, current_group, resources, retained_payload
 from . import seccomp
 
 MAX_BUNDLE = 80 * 1024 * 1024
@@ -233,7 +233,7 @@ class Guardian:
                 self.pod("rm", "--force", "--ignore", prefix + self.record["generation"], timeout=15)
             group = self.record.get("cgroup")
             if group:
-                require(group.startswith(self.cgroup + "/payload/libpod-"), "invalid_recorded_cgroup")
+                retained_payload(group, self.cgroup)
                 path = Path("/sys/fs/cgroup") / group.lstrip("/")
                 require(not path.exists() or not any(p.read_text().strip() for p in path.rglob("cgroup.procs")), "worker_processes_remain")
             payload = Path("/sys/fs/cgroup") / self.cgroup.lstrip("/") / "payload"

@@ -2,7 +2,7 @@ defmodule SymphonyElixir.DeliveryGate.State do
   alias SymphonyElixir.Operator.Decision
   @moduledoc "Pure delivery-cycle transitions. Inputs are verified controller facts, not GitHub responses."
 
-  alias SymphonyElixir.DeliveryGate.{Budget, Command, Effects}
+  alias SymphonyElixir.DeliveryGate.{Budget, Command, Effects, StatusSync}
 
   @budget_commands ~w(start_work checkpoint stop_work resolve_interval reserve_ci observe_ci external_ci begin_fix extend_budget confirm_ci_not_started)
   @budget_errors [:time_budget_exhausted, :fix_budget_exhausted, :ci_budget_exhausted, :retry_budget_exhausted]
@@ -22,10 +22,10 @@ defmodule SymphonyElixir.DeliveryGate.State do
 
   def admission(%{"environment_problem" => problem, "cycle" => %{"recovery" => nil}}, _) when not is_nil(problem), do: {:error, :environment_problem}
 
-  def admission(%{"status" => "idle", "cycle" => nil}, "new"), do: :ok
+  def admission(%{"status" => "idle", "cycle" => nil} = state, "new"), do: if(StatusSync.pending?(state), do: {:error, :status_sync_pending}, else: :ok)
 
-  def admission(%{"cycle" => %{"task" => %{"item_id" => item}, "phase" => "reserved", "budget" => budget} = cycle}, item) do
-    if quiet?(cycle) and Budget.work_available?(budget),
+  def admission(%{"cycle" => %{"task" => %{"item_id" => item}, "phase" => "reserved", "budget" => budget} = cycle} = state, item) do
+    if quiet?(cycle) and Budget.work_available?(budget) and not StatusSync.pending?(state),
       do: :ok,
       else: {:error, :work_unresolved}
   end
@@ -33,6 +33,7 @@ defmodule SymphonyElixir.DeliveryGate.State do
   def admission(_, _), do: {:error, :cycle_blocked}
 
   defp transition(state, "operator_decision", args), do: Decision.apply(state, args)
+  defp transition(state, "status_result", args), do: StatusSync.result(state, args)
 
   defp transition(%{"status" => "bootstrap_required", "cycle" => nil} = state, "bootstrap", args) do
     {:ok, %{state | "status" => "idle", "baseline" => validated_proof(args)}}
@@ -43,7 +44,7 @@ defmodule SymphonyElixir.DeliveryGate.State do
   defp transition(state, "invalidate_queue_confirmation", _args), do: {:ok, Map.merge(state, %{"queue_confirmation" => nil, "baseline" => nil})}
 
   defp transition(%{"status" => "idle", "cycle" => nil} = state, "reserve", args) do
-    if args["sha"] == state["baseline"]["sha"] do
+    if args["sha"] == state["baseline"]["sha"] and not StatusSync.pending?(state) do
       cycle = %{
         "id" => args["cycle_id"],
         "owner" => task(args),
@@ -294,6 +295,16 @@ defmodule SymphonyElixir.DeliveryGate.State do
     else
       {:error, :resume_not_allowed}
     end
+  end
+
+  defp transition(state, "resume_delivery", args) do
+    cycle = state["cycle"]
+    deployment = cycle["deployment"] || %{}
+
+    if cycle["phase"] == "needs_human_decision" and quiet?(cycle) and cycle["cancellation"] == nil and
+         is_binary(cycle["work"]["merge_sha"]) and deployment["sha"] == args["sha"] and deployment["result"] == "success" and deployment["environment_ready"] == true,
+       do: put_cycle(state, %{cycle | "phase" => "awaiting_validation", "block_reason" => nil}),
+       else: {:error, :resume_not_allowed}
   end
 
   defp transition(state, "review_resume", args) do

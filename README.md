@@ -17,6 +17,10 @@ that verify PRs, development runs and deployment evidence. An internal
 [delivery runtime](elixir/docs/delivery_runtime.md) connects retained ownership and budgets
 to worker admission, cancellation and cleanup. Its [task publisher](elixir/docs/github_projects_publication.md)
 retains publication intent, confines Git writes to the task branch and waits for verified CI.
+The [status synchronization foundation](elixir/docs/github_projects_status_sync.md) retains explicit
+controller status transitions, confirms them by reading Projects, and survives cycle completion
+and restart. A full seven-role profile connects worker failures, publication, review, merge and
+manual validation to these intents. Installed profile migration remains a separate rollout stage.
 A local [operator dashboard](elixir/docs/operator_dashboard.md) authenticates the owner and
 records version-bound validation, pause, cancellation and recovery decisions in the same store.
 It also records manual Queue/Scheduler readiness separately from deployment and application validation.
@@ -30,6 +34,16 @@ inspection remains the default. Model and reasoning effort are selected locally 
 See the [execution guide](elixir/docs/github_projects_setup/pr13-runtime-guide.md).
 For a clean Windows/WSL2 installation, the [installer and operator commands](tools/wsl/README.md)
 provide Setup, Start, Stop and login using a local installation descriptor.
+`Select-Pilot` can prepare a subsequent task after verified completion and Stop, retaining prior
+profiles and transition history. Selection is resumable across Windows/WSL interruptions and
+does not start execution or transfer the previous dev validation.
+The companion project's [profile alignment](elixir/docs/second_pilot_stage5_report.md) uses one
+Symphony revision pin, the seven controller statuses and explicit offline check results.
+Development compatibility checks do not replace release pins or exact-candidate hosted CI.
+Windows `Update` prepares a separate verified release and replays a settled legacy journal into
+the seven-status contract. A guarded rollback selects the retained release before first use.
+Installed Windows admission also requires fresh manager measurements of the physical VHDX volumes;
+the dashboard distinguishes Windows capacity from WSL capacity and stops work when evidence expires.
 
 ## Running Symphony
 

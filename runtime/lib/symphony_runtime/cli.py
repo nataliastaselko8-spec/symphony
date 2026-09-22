@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 
-from . import config as settings
+from . import config as settings, windows_storage
 from .common import Rejected, atomic, canonical, command, digest, locked, no_links, private_dir, private_file, read_json, require
 
 
@@ -67,13 +67,22 @@ def verify_source(config):
 
 class SupervisorInput:
     """A Windows parent keeps its stdin pipe open and sends bounded heartbeats."""
-    def __init__(self, stream):
+    def __init__(self, stream, receive_frame=None):
         self.last_seen = time.clock_gettime(time.CLOCK_BOOTTIME)
         self.closed = threading.Event()
         def receive():
             try:
-                while stream.readline(64) == b"ALIVE\n":
+                while True:
+                    raw = stream.readline(16385 if receive_frame else 64)
+                    if receive_frame:
+                        if len(raw) > 16384 or not raw.endswith(b"\n"):
+                            break
+                        receive_frame(json.loads(raw))
+                    elif raw != b"ALIVE\n":
+                        break
                     self.last_seen = time.clock_gettime(time.CLOCK_BOOTTIME)
+            except (Rejected, OSError, ValueError, KeyError, TypeError):
+                pass
             finally:
                 self.closed.set()
         threading.Thread(target=receive, daemon=True).start()
@@ -82,12 +91,14 @@ class SupervisorInput:
         return not self.closed.is_set() and time.clock_gettime(time.CLOCK_BOOTTIME) - self.last_seen <= 15
 
 
-def launch(config, delivery=False, *, execute=False, config_path=None, supervised=False):
+def launch(config, delivery=False, *, execute=False, config_path=None, supervised=False, manager_token=None):
     require(sys.platform == "linux", "linux_required")
     report = preflight(config, execute)
     require(report["controller_ready"] if execute else report["inspection_ready"], "launch_preflight_failed")
     state = private_dir(config["state_root"])
     with locked(state / "launcher.lock"):
+        if (state / "update-receipt.json").exists():
+            atomic(state / "update-used.json", canonical({"started_at_ms": int(time.time() * 1000)}))
         # The fixed CLI entry point owns its temporary read credential cache.
         executable = Path(config["symphony_root"]) / "elixir/bin/symphony"
         require(not delivery, "use_documented_delivery_inspection_command")
@@ -105,8 +116,13 @@ def launch(config, delivery=False, *, execute=False, config_path=None, supervise
             env["SYMPHONY_RUNTIME_HELPER"] = str(Path(config["symphony_root"]) / "runtime/scripts/controller.py")
         proc = None
         stop = threading.Event()
-        parent = SupervisorInput(sys.stdin.buffer) if supervised else None
         token = uuid.uuid4().hex
+        receiver = None
+        if config.get("windows_installation_id"):
+            require(supervised and isinstance(manager_token, str) and len(manager_token) == 32 and
+                    all(c in "0123456789abcdef" for c in manager_token), "windows_manager_required")
+            receiver = lambda frame: windows_storage.retain(frame, config, manager_token, token)
+        parent = SupervisorInput(sys.stdin.buffer, receiver) if supervised else None
         endpoint = state / "launcher.sock"
         if endpoint.exists():
             require(endpoint.is_socket(), "unexpected_launcher_path")

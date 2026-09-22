@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.Operator.View do
   @moduledoc "Allowlisted Russian operator presentation; no raw store or credential data reaches the browser."
-  alias SymphonyElixir.DeliveryGate.{Budget, Command}
+  alias SymphonyElixir.DeliveryGate.{Budget, Command, StatusSync}
   alias SymphonyElixir.GitHubProjects.Delivery.QueueConfirmation
   alias SymphonyElixir.Operator.{Decision, Policy}
 
@@ -10,6 +10,9 @@ defmodule SymphonyElixir.Operator.View do
     "cancel" => "Запросить отмену",
     "unpause" => "Снять операторскую паузу",
     "validate" => "Подтвердить ручную проверку dev",
+    "validation_failed" => "Проверка dev не пройдена",
+    "review_started" => "Начать review",
+    "recheck_status" => "Повторно сверить статус доски",
     "confirm_queue" => "Подтвердить состояние Queue",
     "recovery" => "Назначить recovery",
     "resume" => "Продолжить ту же задачу",
@@ -87,7 +90,7 @@ defmodule SymphonyElixir.Operator.View do
       recovery: get_in(state, ["cycle", "recovery"]) != nil,
       branch: get_in(state, ["cycle", "work", "branch"]),
       repo: repo,
-      worker_stopped: is_nil(status.worker) and Decision.quiet?(cycle),
+      worker_stopped: is_nil(status.worker) and Decision.quiet?(cycle) and not StatusSync.pending?(state),
       pr_url: github_url(repo, "/pull/", pr["number"]),
       pr_number: pr["number"],
       pr_state: pr["state"],
@@ -106,6 +109,7 @@ defmodule SymphonyElixir.Operator.View do
       budget: budget(cycle),
       actions: actions(status),
       decisions: Enum.map(Map.get(status, :decisions, []), &decision/1),
+      status_sync: Map.get(status, :status_sync, []),
       execution_enabled: enabled
     }
   end
@@ -164,7 +168,7 @@ defmodule SymphonyElixir.Operator.View do
   def message(:operator_reason_required), do: "Добавьте комментарий о проверке или причине решения."
   def message(:invalid_operator_decision), do: "Проверьте заполнение формы. Для Queue нужны оба ресурса, обе галочки и комментарий."
   def message(:ready_allowed_item_required), do: "Нужна разрешённая карточка Ready for agent в текущем Project."
-  def message(:owned_allowed_item_required), do: "Для продолжения нужна та же открытая карточка с Agent allowed=yes в статусе Ready for agent или Agent working."
+  def message(:owned_allowed_item_required), do: "Для продолжения нужна та же открытая разрешённая карточка. Полный профиль также принимает Needs human decision."
   def message(:positive_budget_required), do: "Укажите положительное добавление бюджета. Для recovery нужны время работы и CI."
   def message(:close_pr_or_validate_merged_dev), do: "Закройте ненужный PR в GitHub; после merge требуется проверка dev."
   def message(:environment_not_ready), do: "Среда ещё не готова. Проверьте deployment, Scheduler и Cloudflare Queue."
@@ -212,7 +216,9 @@ defmodule SymphonyElixir.Operator.View do
           stopped: stopped,
           unpause: unpause,
           queue: stopped and not status.restart_required and QueueConfirmation.candidate?(status.observation),
-          paused: status.gate.state["operator_pause"] != nil
+          paused: status.gate.state["operator_pause"] != nil,
+          sync: Map.get(status, :status_sync_enabled, false),
+          pending: StatusSync.pending?(status.gate.state)
         })
 
       %{
@@ -235,8 +241,11 @@ defmodule SymphonyElixir.Operator.View do
   defp enabled?("validate", nil, context), do: context.base
   defp enabled?("validate", %{"phase" => phase}, context) when phase in ~w(needs_human_decision awaiting_review awaiting_validation cancelling), do: context.base
   defp enabled?("recovery", %{"phase" => "needs_human_decision", "recovery" => nil, "cancellation" => nil}, context), do: context.stopped
-  defp enabled?("resume", %{"phase" => "needs_human_decision", "work" => %{"merge_sha" => nil}, "cancellation" => nil}, context), do: context.base
+  defp enabled?("resume", %{"phase" => "needs_human_decision", "cancellation" => nil}, context), do: context.base
+  defp enabled?("recheck_status", _, context), do: context.unpause and context.sync and context.pending
   defp enabled?("review_resume", %{"phase" => "awaiting_review"}, context), do: context.base
+  defp enabled?("review_started", %{"phase" => "awaiting_review"}, context), do: context.base and context.sync
+  defp enabled?("validation_failed", %{"phase" => "awaiting_validation"}, context), do: context.base and context.sync
   defp enabled?("extend_budget", cycle, context), do: context.base and cycle != nil
   defp enabled?("finish_cancel", %{"phase" => "cancelling"}, context), do: context.base
   defp enabled?(_, _, _), do: false

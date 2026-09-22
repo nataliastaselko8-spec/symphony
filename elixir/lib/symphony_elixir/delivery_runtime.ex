@@ -5,11 +5,13 @@ defmodule SymphonyElixir.DeliveryRuntime do
   require Logger
 
   alias SymphonyElixir.{Config, DeliveryGate}
-  alias SymphonyElixir.DeliveryGate.{Budget, Effects}
+  alias SymphonyElixir.DeliveryGate.{Budget, Effects, Lifecycle}
+  alias SymphonyElixir.DeliveryGate.StatusSync, as: StatusJournal
   alias SymphonyElixir.DeliveryRuntime.{HookContext, Policy}
   alias SymphonyElixir.GitHubProjects.Delivery
   alias SymphonyElixir.GitHubProjects.Delivery.{Observation, QueueConfirmation}
   alias SymphonyElixir.GitHubProjects.Publication
+  alias SymphonyElixir.GitHubProjects.StatusSync, as: ProjectStatus
   alias SymphonyElixir.Operator.{Auth, Decision}
   alias SymphonyElixir.Operator.Policy, as: OperatorPolicy
   alias SymphonyElixir.Runtime.Worker
@@ -87,6 +89,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
         worker: nil,
         stopping: nil,
         effect: nil,
+        status_task: nil,
         effect_retry_at: now.(),
         read: nil,
         next_read_at: now.(),
@@ -157,7 +160,9 @@ defmodule SymphonyElixir.DeliveryRuntime do
       restart_required: state.restart,
       execution_enabled: Keyword.get(state.opts, :isolated, false),
       runtime_readiness: runtime_readiness(state),
-      decisions: DeliveryGate.decisions(state.gate)
+      decisions: DeliveryGate.decisions(state.gate),
+      status_sync: StatusJournal.view(context.state, state.settings.project.states),
+      status_sync_enabled: Lifecycle.enabled?(state.settings)
     }
 
     {:reply, result, state}
@@ -192,7 +197,10 @@ defmodule SymphonyElixir.DeliveryRuntime do
   def handle_call({:tool, handle, name, args}, {pid, _}, %{worker: %{pid: pid, handle: handle, status: :running}} = state) do
     context = DeliveryGate.status(state.gate)
 
-    case tool_command(state, context, name, args) do
+    result =
+      if StatusJournal.pending?(context.state) and name not in ~w(project_start project_context project_block), do: {:error, :status_sync_pending}, else: tool_command(state, context, name, args)
+
+    case result do
       {:ok, result, next} -> {:reply, {:ok, result}, next}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
@@ -205,11 +213,12 @@ defmodule SymphonyElixir.DeliveryRuntime do
 
     result =
       with true <- cycle["cancellation"] == nil and not state.restart and not state.closing and effect_current?(state),
+           false <- StatusJournal.pending?(DeliveryGate.status(state.gate).state),
            :ok <- candidate_proof(state, id, step, proof),
            {:ok, _} <- execute(state, "effect_sent", %{"operation_id" => id, "step" => step}),
            do: :ok,
            else: (
-             false -> {:error, :effect_revoked}
+             value when is_boolean(value) -> {:error, :effect_revoked}
              error -> error
            )
 
@@ -217,6 +226,22 @@ defmodule SymphonyElixir.DeliveryRuntime do
   end
 
   def handle_call({:effect_send, _, _, _}, _, state), do: {:reply, {:error, :effect_revoked}, state}
+
+  def handle_call({:status_send, id}, {pid, _}, %{status_task: %{task: %{pid: pid}, id: id, version: version}} = state) do
+    context = DeliveryGate.status(state.gate)
+    op = Enum.find(StatusJournal.operations(context.state), &(&1["id"] == id))
+
+    result =
+      with true <- not state.closing and not state.restart and context.version == version and StatusJournal.current?(context.state, op),
+           true <- op["role"] == "blocked" or not Decision.held?(context.state),
+           {:ok, _} <- status_result(state, id, %{status: "sent", observed: op["from"], error: nil, delay_ms: 0}),
+           do: :ok,
+           else: (_ -> {:error, :status_send_revoked})
+
+    {:reply, result, state}
+  end
+
+  def handle_call({:status_send, _}, _, state), do: {:reply, {:error, :status_send_revoked}, state}
 
   def handle_call({:pause, reason}, _from, state) do
     state = block(state, reason)
@@ -229,13 +254,15 @@ defmodule SymphonyElixir.DeliveryRuntime do
   def handle_call({:command, version, id, action, args}, _from, state) do
     context = DeliveryGate.status(state.gate)
 
+    inner_action = if action == "status_transition", do: args["action"], else: action
+
     allowed =
-      action in ~w(request_cancel resolve_interval confirm_ci_not_started extend_budget) or
+      inner_action in ~w(request_cancel resolve_interval confirm_ci_not_started extend_budget block) or
         (state.worker == nil and ready(state, context) == :ok)
 
     result =
       if allowed,
-        do: DeliveryGate.execute(state.gate, version, id, action, args),
+        do: event(state, %{context | version: version}, id, action, args, state.observation),
         else: {:error, :reconciliation_required}
 
     state = if match?({:ok, _}, result), do: invalidate(state), else: state
@@ -269,10 +296,24 @@ defmodule SymphonyElixir.DeliveryRuntime do
   def handle_info(:tick, state) do
     schedule_tick(state.opts)
     state = state |> check_deadline() |> account()
-    {:noreply, state |> maybe_read() |> pump_effect() |> notify_shutdown()}
+    {:noreply, state |> pump_status() |> maybe_read() |> pump_effect() |> notify_shutdown()}
   end
 
   def handle_info(:pump_effect, state), do: {:noreply, pump_effect(state)}
+  def handle_info(:sync_status, state), do: {:noreply, pump_status(state)}
+
+  def handle_info({ref, result}, %{status_task: %{task: %{ref: ref}} = record} = state) do
+    Process.demonitor(ref, [:flush])
+    {:noreply, finish_status(state, record, result)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _, _}, %{status_task: %{task: %{ref: ref}} = record} = state),
+    do: {:noreply, finish_status(state, record, %{status: "unknown", observed: nil, error: "status_task_failed", delay_ms: 30_000})}
+
+  def handle_info({:status_timeout, ref}, %{status_task: %{task: %{ref: ref}} = record} = state) do
+    Task.Supervisor.terminate_child(state.tasks, record.task.pid)
+    {:noreply, finish_status(state, record, %{status: "unknown", observed: nil, error: "status_request_timeout", delay_ms: 30_000})}
+  end
 
   def handle_info(:controller_shutdown, state),
     do: {:noreply, stop_worker(%{state | closing: true}, :controller_shutdown)}
@@ -326,6 +367,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
   def terminate(_reason, state) do
     if state.worker, do: Task.Supervisor.terminate_child(state.tasks, state.worker.pid)
     if state.effect, do: Task.Supervisor.terminate_child(state.tasks, state.effect.task.pid)
+    if state.status_task, do: Task.Supervisor.terminate_child(state.tasks, state.status_task.task.pid)
     :ok
   end
 
@@ -336,7 +378,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
     cond do
       state.closing -> {:error, :controller_shutdown}
       state.restart -> {:error, :restart_required}
-      state.worker != nil or state.effect != nil -> {:error, :worker_not_stopped}
+      state.worker != nil or state.effect != nil or state.status_task != nil -> {:error, :worker_not_stopped}
       state.observation == nil or age(state) >= freshness(state) -> {:error, :observation_required}
       true -> Observation.validate(state.observation, state.settings, context)
     end
@@ -361,7 +403,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
     with true <- context.version == form.version and state.settings.gate.scope == form.scope and not state.restart,
          :ok <- operator_observation(state, form, context, observation, started),
          {:ok, args} <- OperatorPolicy.build(form, payload, observation, state.settings, context.state),
-         {:ok, _} <- DeliveryGate.execute(state.gate, context.version, form.id, "operator_decision", args) do
+         {:ok, _} <- event(state, context, form.id, "operator_decision", args, observation) do
       {:ok, %{id: form.id, kind: form.action, replayed: false}}
     else
       false -> {:error, :operator_context_changed}
@@ -381,7 +423,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
     if Decision.restrictive?(form.action) do
       :ok
     else
-      with true <- state.worker == nil and state.effect == nil,
+      with true <- state.worker == nil and state.effect == nil and state.status_task == nil,
            true <- observation != nil and state.now.() - started < freshness(state),
            true <- form.stamp != nil and form.stamp == OperatorPolicy.stamp(observation),
            :ok <- Observation.validate(observation, state.settings, context),
@@ -440,7 +482,9 @@ defmodule SymphonyElixir.DeliveryRuntime do
     cycle = context.state["cycle"]
     budget = if cycle["budget"]["fixes"] == 0, do: "initial", else: "fix"
 
-    case DeliveryGate.begin_work(state.gate, context.version, issue.id, interval, budget, pid) do
+    sync = if Lifecycle.enabled?(state.settings), do: elem(Lifecycle.wrap(state.settings, context.state, "start_work", %{}, issue.state), 1)
+
+    case DeliveryGate.begin_work(state.gate, context.version, issue.id, interval, budget, pid, sync) do
       {:ok, receipt} ->
         json =
           HookContext.build(state.settings, context, cycle, interval)
@@ -471,6 +515,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
         # Its late result must not revoke the newly registered worker's permit.
         state = cancel_full_read(state)
         send(pid, {:delivery_start, handle})
+        send(self(), :sync_status)
         Process.send_after(self(), {:work_deadline, interval}, receipt.remaining_ms)
         {:reply, {:ok, pid}, %{state | worker: worker, reason: nil, observation: nil}}
 
@@ -506,6 +551,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
   end
 
   defp start_read(%{read: read} = state) when not is_nil(read), do: state
+  defp start_read(%{status_task: task} = state) when not is_nil(task), do: state
   defp start_read(%{effect: effect} = state) when not is_nil(effect), do: state
   defp start_read(%{restart: true} = state), do: state
   defp start_read(%{worker: %{status: status}} = state) when status != :running, do: state
@@ -577,7 +623,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
     result = DeliveryGate.reconcile(state.gate, context.version, state.settings.gate.scope, sha)
 
     if command && (result == :ok or command.action in ~w(observe_ci external_ci manual_ci)) do
-      case DeliveryGate.execute(state.gate, context.version, id(), command.action, command.args) do
+      case event(state, context, id(), command.action, command.args, state.observation) do
         {:ok, _} -> invalidate(state)
         _ -> %{state | reason: :transition_rejected}
       end
@@ -585,6 +631,8 @@ defmodule SymphonyElixir.DeliveryRuntime do
       state
     end
   end
+
+  defp account(%{status_task: task} = state) when not is_nil(task), do: state
 
   defp account(%{worker: %{status: :running} = worker} = state) do
     elapsed = max(worker.elapsed_ms, state.now.() - worker.started_at)
@@ -634,6 +682,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
       result = execute(state, "stop_work", %{"interval_id" => worker.interval, "elapsed_ms" => elapsed})
       state = %{state | worker: nil}
       state = if reason != :normal and state.reason != :publication_requested, do: block(state, "worker_stopped_requires_reconciliation"), else: state
+      state = if Lifecycle.enabled?(state.settings) and abandoned_work?(DeliveryGate.status(state.gate).state), do: block(state, "worker_finished_without_handoff"), else: state
       if match?({:ok, _}, result), do: invalidate(state), else: %{state | reason: :stop_accounting_unconfirmed}
     else
       state = block(state, "stop_unconfirmed")
@@ -641,6 +690,11 @@ defmodule SymphonyElixir.DeliveryRuntime do
       %{state | worker: %{worker | status: :stop_unconfirmed}, reason: :stop_unconfirmed}
     end
   end
+
+  defp abandoned_work?(%{"cycle" => %{"phase" => "reserved"} = cycle}),
+    do: not Enum.any?(Map.values(cycle["effects"]), &(&1["kind"] == "publish" and &1["submitted"]))
+
+  defp abandoned_work?(_), do: false
 
   defp runtime_readiness(state) do
     if Keyword.get(state.opts, :isolated, false), do: Worker.status(), else: %{ready: false, reasons: [:execution_disabled]}
@@ -660,10 +714,11 @@ defmodule SymphonyElixir.DeliveryRuntime do
   end
 
   defp notify_shutdown(state) do
-    if Keyword.get(state.opts, :isolated, false) and state.worker == nil and state.effect == nil and state.stopping == nil do
-      last = DeliveryGate.status(state.gate).state["last_cycle"]
+    if Keyword.get(state.opts, :isolated, false) and state.worker == nil and state.effect == nil and state.stopping == nil and state.status_task == nil do
+      snapshot = DeliveryGate.status(state.gate).state
+      last = snapshot["last_cycle"]
 
-      if state.closing or last != nil do
+      if state.closing or (last != nil and not StatusJournal.pending?(snapshot)) do
         send(Worker, {:runtime_quiescent, last})
         %{state | closing: true}
       else
@@ -682,7 +737,86 @@ defmodule SymphonyElixir.DeliveryRuntime do
 
   defp execute(state, action, args) do
     context = DeliveryGate.status(state.gate)
-    DeliveryGate.execute(state.gate, context.version, id(), action, args)
+    event(state, context, id(), action, args, state.observation)
+  end
+
+  defp event(state, context, id, action, args, observation) do
+    source = event_source(state, context, observation)
+    {action, args} = Lifecycle.wrap(state.settings, context.state, action, args, source)
+    result = DeliveryGate.execute(state.gate, context.version, id, action, args)
+    if action == "lifecycle" and match?({:ok, _}, result), do: send(self(), :sync_status)
+    result
+  end
+
+  defp event_source(state, context, observation) do
+    item = get_in(context.state, ["cycle", "task", "item_id"])
+    row = if observation, do: Enum.find(get_in(observation.facts, ["project", "items"]) || [], &(&1["item_id"] == item))
+    prior = List.last(StatusJournal.operations(context.state)) || %{}
+    (row && row["state"]) || prior["observed"] || if(state.worker, do: state.worker.row["state"])
+  end
+
+  defp pump_status(state) do
+    context = DeliveryGate.status(state.gate)
+    op = StatusJournal.next(context.state || %{}, System.system_time(:millisecond))
+
+    if op && context.mode in [:reconciled, :needs_reconciliation] && status_idle?(state, op) && status_reconcilable?(context.state, op) do
+      next = cancel_read(state)
+      runtime = self()
+      authorize = fn :sent -> GenServer.call(runtime, {:status_send, op["id"]}, 15_000) end
+      options = Keyword.get(state.opts, :status_options, [])
+
+      task =
+        Task.Supervisor.async_nolink(state.tasks, fn ->
+          result = ProjectStatus.step(state.config, context, op, authorize, options)
+          sync_watch(state, context, op, result)
+        end)
+
+      timeout = Process.send_after(self(), {:status_timeout, task.ref}, 60_000)
+      %{next | status_task: %{task: task, id: op["id"], version: context.version, timeout: timeout, started_at: state.now.()}}
+    else
+      state
+    end
+  end
+
+  defp status_reconcilable?(state, op),
+    do: op["sent"] or not StatusJournal.current?(state, op) or op["role"] == "blocked" or not Decision.held?(state)
+
+  defp status_idle?(state, op) do
+    worker_allowed = state.worker == nil or (op["role"] == "blocked" and state.worker.status == :stop_unconfirmed) or (op["role"] == "working" and state.worker.status == :running)
+    not state.closing and not state.restart and state.status_task == nil and state.effect == nil and worker_allowed
+  end
+
+  defp sync_watch(%{worker: %{status: :running} = worker} = state, context, %{"role" => "working"}, %{status: "confirmed"} = result) do
+    watch = Keyword.get(state.opts, :watch_transition, &Delivery.watch_transition/5)
+    proof = watch.(state.config, context, worker.watch_digest, worker.row, Keyword.get(state.opts, :observer_options, []))
+    Map.put(result, :watch, proof)
+  end
+
+  defp sync_watch(_, _, _, result), do: result
+
+  defp finish_status(state, record, result) do
+    Process.cancel_timer(record.timeout)
+    status_result(state, record.id, result)
+    next = %{state | status_task: nil}
+
+    case {next.worker, Map.get(result, :watch)} do
+      {%{status: :running}, {:ok, proof}} -> refresh_worker_status(next, proof, record.started_at)
+      {%{status: :running}, _} -> stop_worker(block(next, "status_sync_unconfirmed"), :status_sync_unconfirmed)
+      _ -> invalidate(next)
+    end
+  end
+
+  defp status_result(state, operation, result) do
+    now = System.system_time(:millisecond)
+
+    execute(state, "status_result", %{
+      "operation_id" => operation,
+      "outcome" => result.status,
+      "observed" => result.observed,
+      "error" => result.error,
+      "at_ms" => now,
+      "retry_at_ms" => now + result.delay_ms
+    })
   end
 
   defp invalidate(state) do
@@ -692,6 +826,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
 
   defp read_failed(state, reason) do
     retry_at = max(state.retry_at, max(state.next_read_at, state.now.() + 30_000))
+    state = if Lifecycle.enabled?(state.settings) and state.worker, do: block(state, to_string(reason)), else: state
     stop_worker(%{state | observation: nil, retry_at: retry_at}, reason)
   end
 
@@ -713,6 +848,14 @@ defmodule SymphonyElixir.DeliveryRuntime do
   defp tool_command(state, _context, name, payload) do
     kind = %{"project_start" => "start", "project_report" => "report", "project_block" => "block", "project_prepare_pr" => "publish"}[name]
 
+    if kind == "start" and payload == %{} and Lifecycle.enabled?(state.settings) do
+      {:ok, %{"status" => "controller_managed"}, state}
+    else
+      request_tool_effect(state, kind, payload)
+    end
+  end
+
+  defp request_tool_effect(state, kind, payload) do
     if Effects.payload?(kind, payload) do
       id = :crypto.hash(:sha256, :erlang.term_to_binary({state.worker.interval, kind, payload}, [:deterministic])) |> Base.encode16(case: :lower)
       args = %{"operation_id" => id, "kind" => kind, "payload" => payload}
@@ -738,6 +881,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
   defp candidate_proof(_, _, _, _), do: :ok
 
   defp pump_effect(%{effect: effect} = state) when not is_nil(effect), do: state
+  defp pump_effect(%{status_task: task} = state) when not is_nil(task), do: state
   defp pump_effect(%{restart: true} = state), do: state
   defp pump_effect(%{closing: true} = state), do: state
 
@@ -748,6 +892,7 @@ defmodule SymphonyElixir.DeliveryRuntime do
     effect = next_effect(cycle)
 
     cond do
+      StatusJournal.pending?(context.state) -> state
       effect == nil -> state
       effect_paused?(state, context, effect) -> state
       sent_effect?(effect) -> launch_effect(state, cycle, effect)
@@ -909,7 +1054,9 @@ defmodule SymphonyElixir.DeliveryRuntime do
         _ -> 30
       end
 
-    %{state | effect: nil, reason: :publication_result_unknown, effect_retry_at: state.now.() + seconds * 1_000}
+    next = %{state | effect: nil, reason: :publication_result_unknown, effect_retry_at: state.now.() + seconds * 1_000}
+    failed = Lifecycle.enabled?(state.settings) and not match?({:error, {:publication_limited, _}}, error)
+    if failed, do: block(next, "publication_requires_decision"), else: next
   end
 
   defp record_observed_effect(state, effect, args) do

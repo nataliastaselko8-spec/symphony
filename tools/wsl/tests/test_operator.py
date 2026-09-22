@@ -16,7 +16,8 @@ from unittest.mock import patch
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "runtime/lib"))
 from symphony_runtime import cli, config, maintenance
-from symphony_runtime.common import Rejected, atomic, locked, private_dir
+from symphony_runtime.common import Rejected, atomic, canonical, locked, private_dir, read_json
+from symphony_runtime.controller import Controller
 from symphony_runtime.guardian import PREFIX
 
 spec = importlib.util.spec_from_file_location("symphony_operator", REPO / "tools/wsl/operator.py")
@@ -143,15 +144,32 @@ class OperatorTest(unittest.TestCase):
                 with locked(Path(cfg["state_root"]) / "launcher.lock"): pass
             with locked(Path(cfg["state_root"]) / "prepare.lock"):
                 return {"stopped": True, "workspace_preserved": True}
-        with patch.object(cli, "stop_inspection", return_value={"stopped": True}), patch.object(cli, "confirm_shutdown", side_effect=confirm) as proof:
+        with patch.object(Controller, "ready", return_value={"phase": "running", "reasons": []}), patch.object(cli, "stop_inspection", return_value={"stopped": True}), patch.object(cli, "confirm_shutdown", side_effect=confirm) as proof:
             self.assertTrue(self.action("stop")["stopped"])
             proof.assert_called_once()
 
     def test_no_launcher_pid_does_not_imply_stopped_worker(self):
         self.setup()
-        with patch.object(cli, "stop_inspection", return_value={"stopped": True}), patch.object(cli, "confirm_shutdown", return_value={"stopped": False}):
+        with patch.object(Controller, "ready", return_value={"phase": "running", "reasons": []}), patch.object(cli, "stop_inspection", return_value={"stopped": True}), patch.object(cli, "confirm_shutdown", return_value={"stopped": False}):
             with self.assertRaisesRegex(operator.Refused, "worker_stop_unconfirmed"):
                 self.action("stop")
+
+    def test_terminal_worker_stop_requires_fresh_known_scope_without_second_stop(self):
+        self.setup()
+        for phase in ("idle", "stopped", "exported"):
+            with patch.object(Controller, "ready", return_value={"phase": phase, "reasons": []}), \
+                    patch.object(cli, "stop_inspection", return_value={"stopped": True}), \
+                    patch.object(cli, "confirm_shutdown", side_effect=AssertionError("redundant legacy Stop")):
+                self.assertTrue(self.action("stop")["stopped"])
+        with patch.object(Controller, "ready", return_value={"phase": "stopped", "reasons": ["worker_ownership_unknown"]}), \
+                patch.object(cli, "stop_inspection", return_value={"stopped": True}), \
+                patch.object(cli, "confirm_shutdown", return_value={"stopped": False}), \
+                self.assertRaisesRegex(operator.Refused, "worker_stop_unconfirmed"):
+            self.action("stop")
+        with patch.object(Controller, "ready", side_effect=Rejected("worker_unavailable")), \
+                patch.object(cli, "stop_inspection", return_value={"stopped": True}), \
+                self.assertRaisesRegex(Rejected, "worker_unavailable"):
+            self.action("stop")
 
     def test_orphaned_prepare_blocks_stop_confirmation(self):
         self.setup()
@@ -209,11 +227,11 @@ class OperatorTest(unittest.TestCase):
         # The existing finite inspect command is used, no worker or project write.
         return self.report
 
-    def select_fixture(self):
+    def select_fixture(self, issue=132, proof=None):
         def fake_run(args, **kwargs):
             return str(self.root / "erlang") if "where" in args else json.dumps(self.report)
-        with patch.dict(os.environ), patch.object(operator, "pilot_source_idle"), patch.object(operator, "run", side_effect=fake_run):
-            return self.action("select-pilot", issue=132)
+        with patch.dict(os.environ), patch.object(operator, "pilot_source_idle", return_value=proof or {"kind": "initial"}), patch.object(operator, "run", side_effect=fake_run):
+            return self.action("select-pilot", issue=issue)
 
     def test_pilot_selection_preserves_old_profile_keys_store_and_uses_one_new_scope(self):
         self.pilot_fixture()
@@ -243,7 +261,7 @@ class OperatorTest(unittest.TestCase):
         with patch.object(operator, "run") as run:
             self.assertEqual(self.action("select-pilot", issue=132), original)
             run.assert_not_called()
-        with self.assertRaisesRegex(operator.Refused, "pilot_already_selected"):
+        with self.assertRaisesRegex(operator.Refused, "confirmed_stop_required"):
             self.action("select-pilot", issue=133)
 
     def test_selection_resume_does_not_erase_started_pilot_or_model_change(self):
@@ -307,17 +325,113 @@ class OperatorTest(unittest.TestCase):
         with self.assertRaisesRegex(Rejected, "model_catalog_refresh_required"):
             self.select_fixture()
 
-    def test_idle_probe_requires_confirmed_stop_and_refuses_any_worker_history(self):
+    def test_idle_probe_requires_bound_stop_and_replayed_evidence(self):
         self.pilot_fixture()
         with self.assertRaisesRegex(operator.Refused, "confirmed_stop_required"):
             operator.pilot_source_idle(self.data, self.config)
-        atomic(Path(self.config["state_root"]) / "last_shutdown.json", b'{"stopped":true}')
-        with patch.object(operator, "run", return_value='{"pilot_source_idle":false}'), \
+        atomic(Path(self.config["state_root"]) / "last_shutdown.json", canonical({"stopped": True, "identity": operator.stop_identity(self.config)}))
+        with patch.object(operator, "run", return_value='{"allowed":false}'), \
                 self.assertRaisesRegex(operator.Refused, "requires_operator_recovery"):
             operator.pilot_source_idle(self.data, self.config)
         atomic(Path(self.config["state_root"]) / "worker.json", b"{}")
-        with self.assertRaisesRegex(operator.Refused, "worker_history"):
+        with self.assertRaisesRegex(operator.Refused, "stop_identity_changed"):
             operator.pilot_source_idle(self.data, self.config)
+
+    def completed_pilot(self):
+        self.pilot_fixture()
+        self.data = self.select_fixture()["installation"]
+        self.config = self.data["runtime_config"]
+        root = Path(self.config["state_root"])
+        binding = {"cycle": "cycle-A", "interval": "interval-A", "generation": "interval-A", "repo": "ExampleOrg/app", "branch": "agent/task-a", "base_sha": "a" * 40}
+        atomic(root / "worker.json", canonical(binding))
+        atomic(private_dir(root / "bindings", create=True) / "interval-A.json", canonical(binding))
+        atomic(root / "delivery.json", b"old completed journal retained verbatim")
+        atomic(root / "last_shutdown.json", canonical({"stopped": True, "identity": operator.stop_identity(self.config)}))
+        return {"kind": "completed", "cycle_id": "cycle-A", "work": {"branch": binding["branch"]},
+                "scope": {"repo": "exampleorg/app"}, "status_sync": {"status": "confirmed"}}
+
+    def next_card(self, issue=200):
+        row = self.report["items"][0]
+        row["item_id"] = "PVTI_next_" + str(issue)
+        row["native_ref"]["issue_number"] = issue
+        row["url"] = "https://github.com/ExampleOrg/app/issues/" + str(issue)
+
+    def test_completed_a_to_b_preserves_history_credentials_and_recognizes_stopped_worker(self):
+        proof = self.completed_pilot()
+        source = Path(self.config["state_root"])
+        before = {p: p.read_bytes() for p in source.rglob("*") if p.is_file()}
+        self.next_card()
+        result = self.select_fixture(200, proof)
+        after = result["installation"]
+        target = Path(after["runtime_config"]["state_root"])
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+        self.assertEqual(after["pilot_history"][-1]["source_pilot"]["issue"], 132)
+        self.assertEqual(after["pilot_history"][-1]["evidence"], proof)
+        self.assertEqual(after["pins"], self.data["pins"])
+        self.assertEqual(after["worker"], self.data["worker"])
+        self.assertEqual(after["github_app"], self.data["github_app"])
+        self.assertFalse((target / "worker.json").exists())
+        self.assertFalse((target / "delivery.json").exists())
+        binding = read_json(source / "worker.json")
+        def status(*_):
+            return {**binding, "phase": "exported", "image": self.data["pins"]["worker_image"],
+                    "profile_revision": self.data["pins"]["profile_revision"], "runtime_contract": "2",
+                    "network_ready": True, "auth_present": True, "free_bytes": 100 * 1024**3}, b""
+        ctl = Controller(after["runtime_config"], transport=status)
+        self.assertIsNone(ctl.current())
+        self.assertTrue(ctl.ready()["ready"])
+        self.assertEqual(self.select_fixture(200, proof), result)
+        self.data = after
+        self.assertEqual(self.action("select-pilot", issue=200), result)
+        with patch.object(operator, "pilot_source_idle", return_value=proof), self.assertRaisesRegex(operator.Refused, "already_completed"):
+            self.action("select-pilot", issue=132)
+
+    def test_completed_probe_keeps_legacy_annotation_and_rejects_foreign_worker_metadata(self):
+        proof = self.completed_pilot()
+        proof["status_sync"] = "legacy_not_recorded"
+        with patch.object(operator, "run", return_value=json.dumps({"allowed": True, "evidence": proof})):
+            observed = operator.pilot_source_idle(self.data, self.config)
+            self.assertEqual(observed["status_sync"], "legacy_not_recorded")
+            proof["cycle_id"] = "different"
+        with patch.object(operator, "run", return_value=json.dumps({"allowed": True, "evidence": proof})), self.assertRaisesRegex(operator.Refused, "worker_owner"):
+            operator.pilot_source_idle(self.data, self.config)
+
+    def test_pending_selection_cannot_fork_or_adopt_changed_models(self):
+        self.pilot_fixture()
+        first = self.select_fixture()
+        with self.assertRaisesRegex(operator.Refused, "selection_pending"), patch.object(cli, "launch") as launch:
+            self.action("start")
+        launch.assert_not_called()
+        self.next_card()
+        with self.assertRaisesRegex(operator.Refused, "selection_pending"):
+            self.select_fixture(200)
+        self.next_card(132)
+        self.report["items"][0]["item_id"] = "PVTI_test"
+        state = Path(self.config["state_root"])
+        atomic(state / "model-selection.json", canonical({"model": "test-model", "effort": "low"}))
+        with self.assertRaisesRegex(Rejected, "selected_effort_unavailable"):
+            self.select_fixture()
+        self.assertEqual(read_json(Path(first["installation"]["runtime_config"]["state_root"]) / "model-selection.json")["effort"], "high")
+
+    def test_completed_source_cannot_restart_while_next_pilot_is_prepared(self):
+        proof = self.completed_pilot()
+        self.next_card()
+        result = self.select_fixture(200, proof)
+        with self.assertRaisesRegex(operator.Refused, "selection_pending"):
+            self.action("select-pilot", issue=132)
+        with self.assertRaisesRegex(operator.Refused, "selection_pending"), patch.object(cli, "launch") as launch:
+            self.action("start", execute=True)
+        launch.assert_not_called()
+        self.assertEqual(self.select_fixture(200, proof), result)
+
+    def test_probe_refuses_live_or_stale_launcher_even_with_prior_stop(self):
+        self.pilot_fixture()
+        root = Path(self.config["state_root"])
+        atomic(root / "last_shutdown.json", canonical({"stopped": True, "identity": operator.stop_identity(self.config)}))
+        atomic(root / "launcher.json", canonical({"pid": os.getpid()}))
+        with patch.object(operator, "run") as replay, self.assertRaisesRegex(operator.Refused, "confirmed_stop_required"):
+            operator.pilot_source_idle(self.data, self.config)
+        replay.assert_not_called()
 
     def test_token_cannot_be_captured_in_logs(self):
         self.setup()

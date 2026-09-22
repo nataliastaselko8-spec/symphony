@@ -285,39 +285,67 @@ def install_helper(request):
     return {"script": str(script), "installation": str(installation)}
 
 
-def pilot_source_idle(data, config):
+def stop_identity(config):
+    from symphony_runtime.common import canonical, digest, private_file
+    worker = Path(config["state_root"]) / "worker.json"
+    return {"config_sha256": digest(canonical(config)),
+            "worker_sha256": digest(private_file(worker).read_bytes()) if worker.exists() else None}
+
+
+def confirm_worker_shutdown(config, cli):
+    # Old runtimes cannot repeat Stop after WSL changes the distro cgroup prefix.
+    # A fresh guardian proof of a known terminal worker needs no second Stop RPC.
+    from symphony_runtime.controller import Controller
+    proof = Controller(config).ready()
+    if proof["phase"] in ("idle", "stopped", "exported") and "worker_ownership_unknown" not in proof["reasons"]:
+        return {"stopped": True, "workspace_preserved": True}
+    return cli.confirm_shutdown(config)
+
+
+def retained_worker_binding(config):
+    from symphony_runtime.common import identifier, private_file, read_json
+    root = Path(config["state_root"])
+    if not (root / "worker.json").exists():
+        return None
+    record = read_json(private_file(root / "worker.json"))
+    generation = identifier(record["generation"])
+    need(record.get("interval") == generation and
+         read_json(private_file(root / "bindings" / (generation + ".json"))) == record,
+         "pilot_worker_binding_unconfirmed")
+    return record
+
+
+def pilot_source_idle(data, config, replay_data=None):
     """Replay the existing store with its own scope; never reset uncertain work."""
     from symphony_runtime.common import private_file, read_json
     root = Path(config["state_root"])
-    need(not (root / "worker.json").exists(), "pilot_source_has_worker_history")
+    need(not (root / "launcher.json").exists(), "confirmed_stop_required_before_pilot")
     shutdown = root / "last_shutdown.json"
     need(shutdown.exists() and read_json(private_file(shutdown)).get("stopped") is True,
          "confirmed_stop_required_before_pilot")
+    stop = read_json(private_file(shutdown))
+    need(stop.get("identity") == stop_identity(config), "stop_identity_changed_run_stop_again")
     expression = r'''
     Logger.configure(level: :error)
     alias SymphonyElixir.{Config.Schema, Workflow}
-    alias SymphonyElixir.DeliveryGate.{Settings, Snapshot, Store}
+    alias SymphonyElixir.DeliveryGate.{Pilot, Settings, Store}
     {:ok, workflow} = Workflow.load(System.fetch_env!("SYMPHONY_PILOT_WORKFLOW"))
     {:ok, settings} = Schema.parse(workflow.config)
     {:ok, gate} = Settings.from_config(settings)
     {:ok, port} = Store.open(gate.path)
     result = try do
       case Store.request(port, %{"op" => "read"}) do
-        {:ok, nil} -> true
         {:ok, snapshot} ->
-          case Snapshot.decode(snapshot, gate.scope) do
-            {:ok, verified} ->
-              state = verified["state"]
-              state["status"] in ["idle", "bootstrap_required"] and
-                Enum.all?(~w(cycle last_cycle operator_pause environment_problem), &(state[&1] == nil))
-            _ -> false
+          case Pilot.inspect(snapshot, gate.scope, settings.tracker.provider["item_ids"] || []) do
+            {:ok, evidence} -> %{allowed: true, evidence: evidence}
+            {:error, reason} -> %{allowed: false, reason: reason}
           end
-        _ -> false
+        _ -> %{allowed: false, reason: "pilot_store_unreadable"}
       end
     after
       Store.close(port)
     end
-    IO.puts(Jason.encode!(%{pilot_source_idle: result}))
+    IO.puts(Jason.encode!(result))
     '''
     env = os.environ.copy()
     env["SYMPHONY_PILOT_WORKFLOW"] = config["workflow"]
@@ -325,9 +353,22 @@ def pilot_source_idle(data, config):
         env[{"app_id": "SYMPHONY_GITHUB_APP_ID", "client_id": "SYMPHONY_GITHUB_APP_CLIENT_ID",
              "installation_id": "SYMPHONY_GITHUB_INSTALLATION_ID"}[name]] = value
     env["SYMPHONY_GITHUB_APP_PRIVATE_KEY_PATH"] = config["app_key"]
-    raw = run([data["controller"]["mise"], "exec", "--", "mix", "run", "--no-start", "--no-compile",
-               "--no-deps-check", "-e", expression], cwd=Path(config["symphony_root"]) / "elixir", env=env, timeout=45)
-    need(json.loads(raw).get("pilot_source_idle") is True, "pilot_source_requires_operator_recovery")
+    reader = replay_data or data
+    raw = run([reader["controller"]["mise"], "exec", "--", "mix", "run", "--no-start", "--no-compile",
+               "--no-deps-check", "-e", expression], cwd=Path(replay_data["runtime_config"]["symphony_root"] if replay_data else config["symphony_root"]) / "elixir", env=env, timeout=45)
+    result = json.loads(raw)
+    reason = result.get("reason", "unconfirmed")
+    reason = reason if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,80}", reason) else "unconfirmed"
+    need(result.get("allowed") is True, "pilot_source_requires_operator_recovery:" + reason)
+    evidence = result["evidence"]
+    # Historical metadata must belong to the completed owner, even with a matching Stop.
+    worker = root / "worker.json"
+    if worker.exists():
+        record = retained_worker_binding(config)
+        need(evidence["kind"] == "completed" and record.get("cycle") == evidence["cycle_id"] and
+             record.get("branch") == evidence["work"]["branch"] and
+             record.get("repo", "").lower() == evidence["scope"]["repo"].lower(), "pilot_worker_owner_unconfirmed")
+    return {**evidence, "stop": stop}
 
 
 def pilot_candidate(report, config, settings, issue):
@@ -345,26 +386,42 @@ def pilot_candidate(report, config, settings, issue):
 
 
 def select_pilot(data, config, settings, cli, issue):
-    """One initial pilot, new immutable profile; the previous store stays untouched."""
+    """Prepare one resumable transition; Windows commits the active descriptor last."""
     from symphony_runtime import models
     from symphony_runtime.common import atomic, canonical, digest, private_dir, private_file, read_json
     need(type(issue) is int and 1 <= issue <= 2**31 - 1, "positive_issue_number_required")
-    if config["pilot_item_ids"]:
-        need(data.get("pilot", {}).get("issue") == issue and
-             config["pilot_item_ids"] == [data["pilot"].get("item_id")], "pilot_already_selected")
+    if config["pilot_item_ids"] and data.get("pilot", {}).get("issue") == issue:
+        need(not (Path(config["state_root"]) / "pilot-selection.json").exists(), "pilot_selection_pending_repeat_target_issue")
+        need(config["pilot_item_ids"] == [data["pilot"].get("item_id")], "pilot_identity_changed")
         return {"installation": data, "selected": data["pilot"], "execution_started": False}
     with stopped_locks(config):
-        pilot_source_idle(data, config)
+        proof = pilot_source_idle(data, config)
+        binding = retained_worker_binding(config)
+        history = data.get("pilot_history", [])
+        need(isinstance(history, list) and len(history) < 128, "pilot_history_limit_or_invalid")
+        need(not any(entry.get("source_pilot", {}).get("issue") == issue for entry in history), "pilot_issue_already_completed")
         report = controller_action(data, "inspect", {})
         row = pilot_candidate(report, config, settings, issue)
         old_root = Path(config["state_root"])
         models.available(models.selected(old_root), models.catalog(old_root, data["pins"]["worker_image"]))
-        identity = digest(canonical({"source": data["controller"]["config"], "repo": report["project"]["repo"],
+        identity = digest(canonical({"source": data, "repo": report["project"]["repo"],
                                      "item": row["item_id"]}))[:24]
-        directory = private_dir(Path(data["controller"]["config"]).parent / ("pilot-" + identity), create=True)
+        intent = {"schema_version": 1, "id": identity, "source_sha256": digest(canonical(data)),
+                  "issue": issue, "item_id": row["item_id"], "evidence": proof,
+                  "previous_worker": binding,
+                  "models": {name: digest(private_file(old_root / name).read_bytes())
+                             for name in ("model-selection.json", "model-catalog.json")}}
+        retained = old_root / "pilot-selection.json"
+        if retained.exists():
+            need(read_json(private_file(retained)) == intent, "pilot_selection_pending_or_source_changed")
+        else:
+            atomic(retained, canonical(intent))
+        origin_config = history[0]["source_config"] if history else data["controller"]["config"]
+        origin_state = Path(history[0]["source_state_root"]) if history else old_root
+        directory = private_dir(Path(origin_config).parent / ("pilot-" + identity), create=True)
         target = directory / "local.json"
         supplied = {**config, "pilot_item_ids": [row["item_id"]], "profile": "pilot-" + identity,
-                    "state_root": str(old_root.parent / (old_root.name + "-" + identity)),
+                    "state_root": str(origin_state.parent / (origin_state.name + "-" + identity)),
                     "workflow": str(directory / "WORKFLOW.md"), "manifest": str(directory / "deployment.json")}
         expected = settings.resolve(supplied, target)
         if target.exists():
@@ -383,16 +440,28 @@ def select_pilot(data, config, settings, cli, issue):
                     need(private_file(output).read_bytes() == raw, "prepared_pilot_model_changed")
                 else:
                     atomic(output, raw)
+            # Recognize a stopped worker from the preceding profile without adopting its task.
+            if binding:
+                bindings = private_dir(new_root / "bindings", create=True)
+                output = bindings / (binding["generation"] + ".json")
+                if output.exists():
+                    need(read_json(private_file(output)) == binding, "prepared_pilot_binding_changed")
+                else:
+                    atomic(output, canonical(binding))
             settings.render(proposed)
             settings.pin(proposed, data["pins"]["symphony_commit"], data["pins"]["profile_revision"],
                          data["pins"]["worker_image"], execute=True)
             cli.verify_source(proposed)
         selected = {"issue": issue, "repo": report["project"]["repo"], "item_id": row["item_id"], "url": row["url"],
-                    "source_config": data["controller"]["config"], "source_state_root": config["state_root"]}
+                    "source_config": data["controller"]["config"], "source_state_root": config["state_root"], "transition_id": identity}
         candidate = copy.deepcopy(data)
         candidate["controller"]["config"] = str(target)
         candidate["runtime_config"] = proposed
         candidate["pilot"] = selected
+        candidate["pilot_history"] = history + [{"id": identity, "source_pilot": data.get("pilot", {}),
+                                                 "source_config": data["controller"]["config"],
+                                                 "source_state_root": config["state_root"], "evidence": proof,
+                                                 "target_config": str(target), "target_issue": issue}]
         return {"installation": candidate, "selected": selected, "execution_started": False}
 
 
@@ -415,8 +484,16 @@ def controller_action(data, action, options):
         with locked(Path(config["state_root"]) / "launcher.lock"):
             with locked(Path(config["state_root"]) / "prepare.lock"):
                 pass
-            proof = cli.confirm_shutdown(config)
+            proof = confirm_worker_shutdown(config, cli)
             need(proof["stopped"], "worker_stop_unconfirmed")
+            from symphony_runtime.common import atomic, canonical
+            root = Path(config["state_root"])
+            # A dead launcher's stale record is removable only after the explicit Stop proof.
+            if (root / "launcher.json").exists():
+                need(not cli.status(config)["running"], "controller_stop_unconfirmed")
+                private_file(root / "launcher.json").unlink()
+            proof = {**proof, "identity": stop_identity(config)}
+            atomic(root / "last_shutdown.json", canonical(proof))
         return proof
     if action == "status":
         return cli.status_report(config)
@@ -432,7 +509,10 @@ def controller_action(data, action, options):
         from symphony_runtime.models import catalog
         return {"models": catalog(Path(config["state_root"]), data["pins"]["worker_image"])}
     if action in ("start", "inspect"):
+        need(action != "start" or not data.get("installation_id") or
+             config.get("windows_installation_id") == data["installation_id"], "windows_storage_upgrade_required")
         need(action == "inspect" or not config["pilot_item_ids"] or options.get("execute") is True, "use_execute_for_selected_pilot")
+        need(action == "inspect" or not (Path(config["state_root"]) / "pilot-selection.json").exists(), "pilot_selection_pending_repeat_target_issue")
         # Read-only mode has an empty exact item filter. Existing runtime admission remains authoritative.
         for name, value in data["github_app"].items():
             target = {"app_id": "SYMPHONY_GITHUB_APP_ID", "client_id": "SYMPHONY_GITHUB_APP_CLIENT_ID",
@@ -445,7 +525,7 @@ def controller_action(data, action, options):
         if action == "inspect":
             os.environ["SYMPHONY_GITHUB_APP_PRIVATE_KEY_PATH"] = config["app_key"]
             return json.loads(run([str(root / "elixir/bin/symphony"), "--dry-run", config["workflow"]], timeout=180))
-        options = {"supervised": True} if options.get("supervised") else {}
+        options = {"supervised": True, "manager_token": options.get("manager_token")} if options.get("supervised") else {}
         raise SystemExit(cli.launch(config, execute=True, config_path=data["controller"]["config"], **options))
     if action == "check":
         return cli.preflight(config, execute=True)
@@ -488,5 +568,6 @@ if __name__ == "__main__" and len(sys.argv) > 1:
     parser.add_argument("--model")
     parser.add_argument("--effort")
     parser.add_argument("--supervised", action="store_true")
+    parser.add_argument("--manager-token")
     arguments = parser.parse_args()
     entry({**vars(arguments), "installation": json.loads(Path(arguments.installation).read_text())})

@@ -101,14 +101,27 @@ defmodule SymphonyElixir.GitHubProjects.WriteClient do
   def link(client, id), do: graphql(client, @link, %{"input" => %{"issueId" => client.cycle["task"]["issue_id"], "pullRequestIds" => [id]}})
 
   @spec status(map(), map(), String.t()) :: {:ok, term()} | {:error, term()}
-  def status(client, scope, role) when role in ~w(working blocked handoff) do
+  def status(client, scope, role) when role in ~w(working blocked handoff review dev_validation production_ready) do
+    write_status(client, scope, role, false)
+  end
+
+  @spec sync_status(map(), map(), String.t()) :: {:ok, term()} | {:error, term()}
+  def sync_status(client, scope, role), do: write_status(client, scope, role, true)
+
+  defp write_status(client, scope, role, sync) do
     name = client.settings.project.states[role]
     field = scope.schema["status"]
 
     case Enum.filter(field["options"], &(&1["name"] == name)) do
       [%{"id" => option}] ->
         input = %{"projectId" => scope.project["id"], "itemId" => client.cycle["task"]["item_id"], "fieldId" => field["id"], "value" => %{"singleSelectOptionId" => option}}
-        graphql(client, @status, %{"input" => input}, :projects_write)
+
+        if sync do
+          body = %{"query" => @status, "variables" => %{"input" => input}}
+          request(client, :post, :graphql, body, %{}, :projects_write, &decode_status/1)
+        else
+          graphql(client, @status, %{"input" => input}, :projects_write)
+        end
 
       _ ->
         {:error, :publication_status_unconfirmed}
@@ -145,7 +158,7 @@ defmodule SymphonyElixir.GitHubProjects.WriteClient do
     end
   end
 
-  defp request(client, method, path, body, params, profile) do
+  defp request(client, method, path, body, params, profile, decoder \\ &decode/1) do
     with {:ok, reference} <- Credentials.reference(client.settings.tracker.provider, profile),
          {:ok, token} <- Credentials.token(reference, client.opts) do
       url = if path == :graphql, do: "https://api.github.com/graphql", else: "https://api.github.com/repos/" <> reference.repo <> path
@@ -166,7 +179,7 @@ defmodule SymphonyElixir.GitHubProjects.WriteClient do
       options = if body, do: Keyword.put(options, :json, body), else: options
       response = Keyword.get(client.opts, :http, &Req.request/1).(options)
       if match?({:ok, %{status: 401}}, response), do: Credentials.invalidate(reference, token, client.opts)
-      decode(response)
+      decoder.(response)
     end
   rescue
     _ -> {:error, :publication_transport_unknown}
@@ -199,6 +212,27 @@ defmodule SymphonyElixir.GitHubProjects.WriteClient do
   end
 
   defp decode(_), do: {:error, :publication_result_unknown}
+
+  defp decode_status({:ok, %{status: code, headers: headers}} = response) when code in [403, 429] do
+    headers = Map.new(headers)
+    if code == 429 or Map.has_key?(headers, "retry-after") or Map.get(headers, "x-ratelimit-remaining") in ["0", ["0"]], do: decode(response), else: {:error, :status_permission_denied}
+  end
+
+  defp decode_status({:ok, %{status: code}}) when code in [400, 401, 404, 422], do: {:error, :status_write_refused}
+
+  defp decode_status(response) do
+    case decode(response) do
+      {:ok, %{"data" => %{"updateProjectV2ItemFieldValue" => %{"projectV2Item" => %{"id" => _}}}} = body} ->
+        if Map.get(body, "errors", []) == [], do: {:ok, body}, else: {:error, :status_write_unknown}
+
+      {:error, _} = error ->
+        error
+
+      _ ->
+        {:error, :status_write_unknown}
+    end
+  end
+
   defp selected?(nil, _), do: true
   defp selected?(ids, id), do: id in ids
 end
