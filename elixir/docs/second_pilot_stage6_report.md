@@ -1,6 +1,6 @@
 # Этап 6: обновление, миграция и контроль Windows-диска
 
-Дата: 2026-09-22. **Локальная реализация и приёмка завершены. Этап остаётся открыт до hosted CI опубликованной ветки Symphony.** По решению владелицы Symphony она публикует самостоятельно, а agent-runner пока остаётся локальным. Действующая установка не переключалась; следующий продуктовый пилот не запускался.
+Дата: 2026-09-22. **Локальная реализация и приёмка завершены. PR #14 смержен; нестабильный тест, упавший в `main`, исправлен и прошёл полный локальный `make all`. Этап остаётся открыт до публикации исправления и успешного hosted CI.** Владелица выполняет публикацию самостоятельно, agent-runner пока остаётся локальным. Действующая установка не переключалась; следующий продуктовый пилот не запускался.
 
 ## Главное решение и его обоснование
 
@@ -69,11 +69,39 @@
 
 Промежуточные candidates не объявлялись принятыми; после исправлений pins, image и bundle пересобирались. Проверки итогового комплекта выполнены отдельно.
 
+## Публикация и hosted CI
+
+Владелица слила [PR #14](https://github.com/nataliastaselko8-spec/symphony/pull/14) в `main` 2026-09-22 в 13:08:37 UTC. Head PR — `cd66e546296a3ba81cdf6e20bc36a64143d87f6e`, merge commit — `d136126c76270dff8ef9d78e3d7b5b2fa7dbd180`.
+
+| Проверка | Результат |
+| --- | --- |
+| [PR: make-all, run 35730267948](https://github.com/nataliastaselko8-spec/symphony/actions/runs/35730267948) | success, attempt 1 |
+| [PR: pr-description-lint, run 35730268051](https://github.com/nataliastaselko8-spec/symphony/actions/runs/35730268051) | success, attempt 1 |
+| [main: make-all, run 35731558158](https://github.com/nataliastaselko8-spec/symphony/actions/runs/35731558158) | failure, attempt 1; шаг `Verify make all`, exit code 2 |
+
+После `git fetch origin main` подтверждено: дерево merge commit совпадает с head PR. Отличия от принятого source pin `9f0a6b5` ограничены тремя файлами документации. Полный журнал шага предоставила владелица: 623 теста, 1 failure, 6 skipped при покрытии 100%; seed `197295`, max_cases `8`.
+
+### Причина сбоя и локальное исправление
+
+Упал `late publication authorization after cancellation is rejected` в `delivery_runtime_test.exs`. Отказ `effect_revoked` уже был получен, но тест затем ожидал временный `reason: publication_result_unknown`. Завершение остановки worker и следующее наблюдение законно заменяют это диагностическое поле; порядок завершения двух задач определял, успеет ли тест увидеть его.
+
+Прежнее ожидание воспроизведено с ошибкой при управляемом порядке событий: publisher завершён, затем подтверждена остановка worker и принято новое наблюдение. Исправление проверяет оба порядка завершения с явными сообщениями между процессами. После завершения обоих процессов и обновления наблюдения проверяются сохранённая отмена, фаза `cancelling`, единственная исходная операция с пустыми шагами и признаком отмены, завершение worker и запрет запуска другой задачи.
+
+Исправление находится в локальной ветке `agent/fix-cancellation-test-race`. Изменены только тест и документация; runtime, профиль, порог покрытия и закреплённый комплект не менялись.
+
+| Проверка исправления | Результат |
+| --- | --- |
+| Прежнее ожидание с управляемым порядком | 1 test, 1 failure на исходном ожидании `reason` |
+| Весь `DeliveryRuntimeTest`, seed `197295`, max_cases `8` | 36 tests, 0 failures |
+| Полный `make -C elixir all` после исправления | 624 tests, 0 failures, 6 opt-in skips; coverage 100%; format/specs/Credo/Dialyzer PASS |
+| Python store / publisher / runtime | 8 / 9 / 86 tests, успешно |
+| Hosted CI исправления | Ожидает публикации владелицей |
+
 ## Что осталось
 
-1. Владелица самостоятельно публикует ветку Symphony `agent/second-pilot-release`, создаёт PR в своём форке по подготовленному шаблону и получает hosted CI для опубликованного commit. Одна публикация feature-ветки не запускает `make-all`: workflow запускается на PR либо push в `main`.
+1. Опубликовать ветку `agent/fix-cancellation-test-race`, создать новый PR и подтвердить успешный hosted CI исправления, затем проверку `main` после merge. Локальное исправление и полный прогон завершены; описание PR подготовлено в `.runtime-local/pr14-cancellation-fix-pr.md`.
 2. Agent-runner пока остаётся локальным. Публикация его ветки и отдельный PR сейчас не требуются; hosted profile CI не выполнялся и отложен до публикации репозитория. Доказательства текущей приёмки профиля — 42 локальных теста, strict pin/renderer/Elixir contract и проверки собранного image/bundle. Они не обозначаются как успешный hosted CI.
-3. После CI Symphony завершить релизный допуск этапов 5–6 для локального комплекта и согласованный переход к этапу 7. Действующая установка и новая пилотная карточка остаются отдельными действиями; локальная приёмка их не запускала. Полный CI продуктового PR при новом пилоте остаётся обязательным для `PR ready`.
+3. После устранения сбоя CI Symphony завершить релизный допуск этапов 5–6 для локального комплекта и согласованный переход к этапу 7. Действующая установка и новая пилотная карточка остаются отдельными действиями; локальная приёмка их не запускала. Полный CI продуктового PR при новом пилоте остаётся обязательным для `PR ready`.
 
 Шесть opt-in live E2E не выполнялись без своих внешних fixtures. В project-container 22 проверки пропущены из-за отсутствующих offline-зависимостей, Docker build отмечен как `ci_only`; результат честно `incomplete_local`, а не полный зелёный CI приложения. Реальный сон Windows и заполнение пользовательского диска не вызывались: соответствующие переходы проверены контролируемыми входными данными. Существующие Hex dependency advisories этим этапом не исправлены.
 
@@ -84,6 +112,7 @@
 - `.runtime-local/stage6-make-v4.log`, `stage6-wsl-v4-tests.log`, `stage6-profile-v4-tests.log`, `stage6-strict-v4.log`, `stage6-native-v4.log`.
 - `.runtime-local/stage6-clean-v4.log`, `stage6-real-update-v4.log`, `stage6-rollback-v4.log`, `stage6-reapply-v4.log`.
 - `.runtime-local/stage6-preservation-v4.json`, `stage6-grants-v4.json`, `stage6-dashboard-v4.json`, `stage6-manager-loss-v4.json`, `stage6-container-v4.log`.
+- `.runtime-local/pr14-cancellation-red.log`, `pr14-cancellation-green.log`, `pr14-make-all-fix.log` — воспроизведение сбоя и проверка исправления теста.
 - Чистый итоговый стенд: `.runtime-local/stage6-clean-v4/instances/5d378b02ee0b4f02b57ca35e6d88f936/installation.json`.
 - Обновлённая копия: `.runtime-local/stage6-old-copy-v3/installation.json`.
 - Черновик описания PR: `.runtime-local/stage6-symphony-pr.md`.

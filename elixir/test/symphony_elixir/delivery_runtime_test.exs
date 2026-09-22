@@ -316,31 +316,65 @@ defmodule SymphonyElixir.DeliveryRuntimeTest do
     send(pid, :finish)
   end
 
-  test "late publication authorization after cancellation is rejected", c do
-    parent = self()
+  for first <- [:publisher, :worker] do
+    @finish_first first
+    test "late publication authorization after cancellation is rejected when #{first} finishes first", c do
+      parent = self()
 
-    runner = fn _, _, _, authorize, _ ->
-      send(parent, {:ready_to_send, self()})
+      runner = fn _, _, _, authorize, _ ->
+        send(parent, {:ready_to_send, self()})
 
-      receive do
-        :continue -> send(parent, {:late_authorization, authorize.("comment", %{})})
+        receive do
+          :continue -> send(parent, {:late_authorization, authorize.("comment", %{})})
+        end
+
+        {:error, :revoked}
       end
 
-      {:error, :revoked}
-    end
+      verifier = fn _ ->
+        send(parent, {:verifying_stop, self()})
 
-    runtime = boot(c, publication_step: runner, stop_verifier: &stopped/1)
-    reserve(runtime)
-    {pid, _} = start_worker(runtime)
-    task_tool(pid, "project_report", %{"body" => "Progress"})
-    assert_receive {:ready_to_send, publisher}, 2_000
-    send(runtime, :pump_effect)
-    version = DeliveryRuntime.status(runtime).gate.version
-    DeliveryRuntime.command(runtime, version, "cancel-before-send", "request_cancel", G.operator())
-    send(publisher, :continue)
-    assert_receive {:late_authorization, {:error, :effect_revoked}}, 2_000
-    state = await(runtime, &(&1.reason == :publication_result_unknown))
-    assert Enum.all?(state.gate.state["cycle"]["effects"], fn {_, effect} -> effect["steps"] == %{} end)
+        receive do
+          :continue -> :stopped
+        end
+      end
+
+      runtime = boot(c, publication_step: runner, stop_verifier: verifier)
+      reserve(runtime)
+      {pid, _} = start_worker(runtime)
+      assert {:ok, %{"operation_id" => op}} = task_tool(pid, "project_report", %{"body" => "Progress"})
+      assert_receive {:ready_to_send, publisher}, 2_000
+      send(runtime, :pump_effect)
+      version = DeliveryRuntime.status(runtime).gate.version
+      assert {:ok, _} = DeliveryRuntime.command(runtime, version, "cancel-before-send", "request_cancel", G.operator())
+      assert_receive {:verifying_stop, stopper}, 2_000
+
+      case @finish_first do
+        :publisher ->
+          send(publisher, :continue)
+          await(runtime, fn _ -> :sys.get_state(runtime).effect == nil end)
+          send(stopper, :continue)
+
+        :worker ->
+          send(stopper, :continue)
+          await(runtime, &(&1.worker == nil))
+          send(publisher, :continue)
+      end
+
+      assert_receive {:late_authorization, {:error, :effect_revoked}}, 2_000
+      await(runtime, &(&1.worker == nil and :sys.get_state(runtime).effect == nil))
+      # A fresh observation replaces the transient reason; cancellation and the outbox must survive it.
+      DeliveryRuntime.refresh(runtime)
+      state = ready(runtime)
+      cycle = state.gate.state["cycle"]
+      assert cycle["phase"] == "cancelling"
+      assert cycle["cancellation"] != nil
+      assert map_size(cycle["effects"]) == 1
+      assert %{"cancelled" => true, "steps" => steps, "payload" => %{"body" => "Progress"}} = cycle["effects"][op]
+      assert steps == %{}
+      refute Process.alive?(pid)
+      assert {:error, _} = DeliveryRuntime.dispatch(runtime, issue("B"), nil, fn _ -> flunk("cancelled work resumed") end)
+    end
   end
 
   test "operator pause revokes a pending publisher and unpause does not discard its unresolved intent", c do
