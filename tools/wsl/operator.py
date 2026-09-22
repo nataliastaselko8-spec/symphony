@@ -292,6 +292,16 @@ def stop_identity(config):
             "worker_sha256": digest(private_file(worker).read_bytes()) if worker.exists() else None}
 
 
+def confirm_worker_shutdown(config, cli):
+    # Old runtimes cannot repeat Stop after WSL changes the distro cgroup prefix.
+    # A fresh guardian proof of a known terminal worker needs no second Stop RPC.
+    from symphony_runtime.controller import Controller
+    proof = Controller(config).ready()
+    if proof["phase"] in ("idle", "stopped", "exported") and "worker_ownership_unknown" not in proof["reasons"]:
+        return {"stopped": True, "workspace_preserved": True}
+    return cli.confirm_shutdown(config)
+
+
 def retained_worker_binding(config):
     from symphony_runtime.common import identifier, private_file, read_json
     root = Path(config["state_root"])
@@ -474,7 +484,7 @@ def controller_action(data, action, options):
         with locked(Path(config["state_root"]) / "launcher.lock"):
             with locked(Path(config["state_root"]) / "prepare.lock"):
                 pass
-            proof = cli.confirm_shutdown(config)
+            proof = confirm_worker_shutdown(config, cli)
             need(proof["stopped"], "worker_stop_unconfirmed")
             from symphony_runtime.common import atomic, canonical
             root = Path(config["state_root"])

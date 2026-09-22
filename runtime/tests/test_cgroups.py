@@ -39,6 +39,17 @@ class CgroupsTest(unittest.TestCase):
             stat.return_value.st_ino = 42
             self.assertEqual(cgroups.resources(group), 42)
 
+    def test_retained_payload_accepts_only_same_service_across_wsl_restart(self):
+        current = '/wsl-user/distro-9001/systemd/system.slice/symphony-fixture.service'
+        previous = '/wsl-user/distro-287/systemd/system.slice/symphony-fixture.service/payload/libpod-' + 'a' * 64
+        self.assertEqual(cgroups.retained_payload(previous, current), previous)
+        for value in (previous.replace('fixture.service', 'other.service'),
+                      previous.replace('/payload/', '/payload/../payload/'),
+                      previous.replace('/payload/', '//payload/'), previous + '/child',
+                      previous.replace('libpod-', 'arbitrary-')):
+            with self.subTest(value=value), self.assertRaises(Rejected):
+                cgroups.retained_payload(value, current)
+
     def test_hybrid_or_ambiguous_membership_is_rejected(self):
         for raw in ('2:cpu:/fixture', '0::/fixture\n2:cpu:/fixture', ''):
             with patch.object(Path, 'read_text', return_value=raw), self.assertRaises(Rejected):

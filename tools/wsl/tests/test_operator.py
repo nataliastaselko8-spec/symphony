@@ -144,15 +144,32 @@ class OperatorTest(unittest.TestCase):
                 with locked(Path(cfg["state_root"]) / "launcher.lock"): pass
             with locked(Path(cfg["state_root"]) / "prepare.lock"):
                 return {"stopped": True, "workspace_preserved": True}
-        with patch.object(cli, "stop_inspection", return_value={"stopped": True}), patch.object(cli, "confirm_shutdown", side_effect=confirm) as proof:
+        with patch.object(Controller, "ready", return_value={"phase": "running", "reasons": []}), patch.object(cli, "stop_inspection", return_value={"stopped": True}), patch.object(cli, "confirm_shutdown", side_effect=confirm) as proof:
             self.assertTrue(self.action("stop")["stopped"])
             proof.assert_called_once()
 
     def test_no_launcher_pid_does_not_imply_stopped_worker(self):
         self.setup()
-        with patch.object(cli, "stop_inspection", return_value={"stopped": True}), patch.object(cli, "confirm_shutdown", return_value={"stopped": False}):
+        with patch.object(Controller, "ready", return_value={"phase": "running", "reasons": []}), patch.object(cli, "stop_inspection", return_value={"stopped": True}), patch.object(cli, "confirm_shutdown", return_value={"stopped": False}):
             with self.assertRaisesRegex(operator.Refused, "worker_stop_unconfirmed"):
                 self.action("stop")
+
+    def test_terminal_worker_stop_requires_fresh_known_scope_without_second_stop(self):
+        self.setup()
+        for phase in ("idle", "stopped", "exported"):
+            with patch.object(Controller, "ready", return_value={"phase": phase, "reasons": []}), \
+                    patch.object(cli, "stop_inspection", return_value={"stopped": True}), \
+                    patch.object(cli, "confirm_shutdown", side_effect=AssertionError("redundant legacy Stop")):
+                self.assertTrue(self.action("stop")["stopped"])
+        with patch.object(Controller, "ready", return_value={"phase": "stopped", "reasons": ["worker_ownership_unknown"]}), \
+                patch.object(cli, "stop_inspection", return_value={"stopped": True}), \
+                patch.object(cli, "confirm_shutdown", return_value={"stopped": False}), \
+                self.assertRaisesRegex(operator.Refused, "worker_stop_unconfirmed"):
+            self.action("stop")
+        with patch.object(Controller, "ready", side_effect=Rejected("worker_unavailable")), \
+                patch.object(cli, "stop_inspection", return_value={"stopped": True}), \
+                self.assertRaisesRegex(Rejected, "worker_unavailable"):
+            self.action("stop")
 
     def test_orphaned_prepare_blocks_stop_confirmation(self):
         self.setup()

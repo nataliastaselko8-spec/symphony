@@ -332,6 +332,25 @@ class RuntimeTest(unittest.TestCase):
             self.assertEqual(value.stop("cancel")["phase"], "stop_unconfirmed")
             self.assertTrue(any(call.args[0] == "stop" for call in pod.call_args_list))
 
+    def test_stop_after_wsl_restart_checks_previous_and_current_payloads(self):
+        value = self.guardian()
+        value.record.update(phase="stopped", cycle="cycle", cgroup="/wsl-user/distro-287/systemd/system.slice/symphony-fixture.service/payload/libpod-" + "a" * 64)
+        value.cgroup = "/wsl-user/distro-9001/systemd/system.slice/symphony-fixture.service"
+        original_path = Path
+        filesystem = self.root / "sysfs"
+        def mapped_path(raw):
+            return filesystem if raw == "/sys/fs/cgroup" else original_path(raw)
+        with patch("symphony_runtime.guardian.Path", side_effect=mapped_path), \
+                patch.object(value, "summary", side_effect=lambda: dict(value.record)), patch.object(value, "pod"):
+            self.assertEqual(value.stop("restarted")["phase"], "stopped")
+            for group in (value.record["cgroup"], value.cgroup + "/payload"):
+                processes = filesystem / group.lstrip("/") / "cgroup.procs"
+                processes.parent.mkdir(parents=True, exist_ok=True)
+                processes.write_text("123\n")
+                self.assertEqual(value.stop("restarted")["phase"], "stop_unconfirmed")
+                processes.write_text("")
+            self.assertEqual(value.stop("restarted")["phase"], "stopped")
+
     def test_heartbeat_and_network_loss_stop_worker(self):
         value = self.guardian()
         with patch.object(value, "ready"), patch.object(value, "stop") as stop:
