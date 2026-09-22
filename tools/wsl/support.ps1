@@ -135,7 +135,19 @@ function New-NativeProcess([string]$File, [string[]]$Arguments, [switch]$Redirec
     $info.RedirectStandardError = [bool]$Redirect
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $info
-    if (-not $process.Start()) { throw 'Process did not start.' }
+    # .NET Framework inherits Console.InputEncoding for the redirected writer.
+    # Its UTF-8 preamble would be emitted before even a BaseStream binary copy.
+    $encoding = New-Object Text.UTF8Encoding($false)
+    if ($info.PSObject.Properties['StandardInputEncoding']) {
+        $info.StandardInputEncoding = $encoding
+        if (-not $process.Start()) { throw 'Process did not start.' }
+    } else {
+        $previousEncoding = [Console]::InputEncoding
+        try {
+            [Console]::InputEncoding = $encoding
+            if (-not $process.Start()) { throw 'Process did not start.' }
+        } finally { [Console]::InputEncoding = $previousEncoding }
+    }
     return $process
 }
 function Invoke-Native([string]$File, [string[]]$Arguments, [string]$InputFile, [int]$TimeoutSeconds = 3600) {

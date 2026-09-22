@@ -53,6 +53,19 @@ public class NativeFixture {
     $output = Invoke-Native $exe @('binary') -InputFile $binary | ConvertFrom-Json
     Assert ($output.sha256 -ieq (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash) 'Binary stdin was corrupted'
     $passed++
+    $previousEncoding = [Console]::InputEncoding
+    try {
+        [Console]::InputEncoding = New-Object Text.UTF8Encoding($true)
+        $output = Invoke-Native $exe @('binary-bom-console') -InputFile $binary | ConvertFrom-Json
+        Assert ($output.sha256 -ieq (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash) 'Console BOM corrupted binary stdin'
+        Assert ([Console]::InputEncoding.GetPreamble().Length -eq 3) 'Console input encoding was not restored'
+        if ($WslDistro) {
+            $actual = Invoke-Native (Wsl-Path) @('-d',$WslDistro,'--cd','/','--exec','/usr/bin/python3','-I','-B','-c','import hashlib,sys;print(hashlib.file_digest(sys.stdin.buffer,"sha256").hexdigest())') -InputFile $binary
+            Assert ($actual -ieq (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash) 'WSL binary stdin was corrupted'
+            $passed++
+        }
+    } finally { [Console]::InputEncoding = $previousEncoding }
+    $passed++
     Rejects { Invoke-Native $exe @('fail') } 'native_command_failed_.*_exit_7'
     $passed++
     $watch = [Diagnostics.Stopwatch]::StartNew()
