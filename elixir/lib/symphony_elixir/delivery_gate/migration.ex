@@ -5,6 +5,14 @@ defmodule SymphonyElixir.DeliveryGate.Migration do
 
   @legacy ~w(ready working blocked handoff)
   @full @legacy ++ ~w(review dev_validation production_ready)
+  @container_policy %{
+    "type" => "workspaceWrite",
+    "writableRoots" => ["/workspace", "/workspace/repo", "/workspace/repo/.git"],
+    "readOnlyAccess" => %{"type" => "fullAccess"},
+    "networkAccess" => false,
+    "excludeTmpdirEnvVar" => false,
+    "excludeSlashTmp" => false
+  }
 
   @spec prepare(map() | nil, map(), map()) :: {:ok, map()} | {:error, atom()}
   def prepare(source, before, after_config) do
@@ -50,11 +58,23 @@ defmodule SymphonyElixir.DeliveryGate.Migration do
          next when is_map(next) <- target.tracker.provider["states"],
          true <- Enum.sort(Map.keys(states)) == Enum.sort(@legacy),
          true <- Enum.sort(Map.keys(next)) == Enum.sort(@full) and Map.take(next, @legacy) == states,
-         normalized = %{old | tracker: %{old.tracker | provider: Map.put(old.tracker.provider, "states", next)}, delivery: %{old.delivery | state_path: target.delivery.state_path}},
+         true <- compatible_codex?(old.codex, target.codex),
+         normalized = %{
+           old
+           | tracker: %{old.tracker | provider: Map.put(old.tracker.provider, "states", next)},
+             delivery: %{old.delivery | state_path: target.delivery.state_path},
+             codex: target.codex
+         },
          true <- normalized == target do
       {:ok, old, target, old_gate.scope, new_gate.scope}
     else
       _ -> {:error, :incompatible_migration_contract}
     end
+  end
+
+  defp compatible_codex?(old, target) do
+    old == target or
+      (old.read_timeout_ms == 5_000 and is_nil(old.turn_sandbox_policy) and
+         target == %{old | read_timeout_ms: 60_000, turn_sandbox_policy: @container_policy})
   end
 end

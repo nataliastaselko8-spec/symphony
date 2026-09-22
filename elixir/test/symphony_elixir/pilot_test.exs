@@ -104,6 +104,36 @@ defmodule SymphonyElixir.PilotTest do
     assert {:error, _} = Snapshot.decode(%{"scope" => new_scope, "commands" => [], "schema_version" => 999}, new_scope)
   end
 
+  test "migration accepts the exact container policy upgrade and rejects unrelated Codex changes" do
+    {before, proposed, old_scope, new_scope} = migration_configs()
+    source = ready() |> append("complete", G.proof("c")) |> Map.put("scope", old_scope)
+
+    policy = %{
+      "type" => "workspaceWrite",
+      "writableRoots" => ["/workspace", "/workspace/repo", "/workspace/repo/.git"],
+      "readOnlyAccess" => %{"type" => "fullAccess"},
+      "networkAccess" => false,
+      "excludeTmpdirEnvVar" => false,
+      "excludeSlashTmp" => false
+    }
+
+    proposed = Map.put(proposed, "codex", %{"read_timeout_ms" => 60_000, "turn_sandbox_policy" => policy})
+    assert {:ok, migrated} = Migration.prepare(source, before, proposed)
+    assert {:ok, ^migrated} = Snapshot.decode(migrated, new_scope)
+
+    for codex <- [
+          %{"read_timeout_ms" => 60_000},
+          %{"read_timeout_ms" => 5_000, "turn_sandbox_policy" => policy},
+          %{"read_timeout_ms" => 60_000, "turn_sandbox_policy" => Map.put(policy, "networkAccess", true)},
+          %{"read_timeout_ms" => 60_000, "turn_sandbox_policy" => Map.put(policy, "writableRoots", ["/"])}
+        ] do
+      assert {:error, _} = Migration.prepare(source, before, Map.put(proposed, "codex", codex))
+      assert {:error, _} = Snapshot.decode(put_in(migrated, ["migration", "after", "codex"], codex), new_scope)
+    end
+
+    assert {:error, _} = Migration.prepare(source, Map.put(before, "codex", %{"read_timeout_ms" => 10_000}), proposed)
+  end
+
   test "initial profile requires no selected task; a legacy completed journal retains its limitation" do
     assert {:ok, %{"kind" => "initial"}} = Pilot.inspect(nil, @scope, [])
     assert {:error, :invalid_snapshot} = Pilot.inspect(false, @scope, [])

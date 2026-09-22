@@ -89,6 +89,10 @@ class PilotReplayTest(unittest.TestCase):
                         new_workflow = destination / "WORKFLOW.md"
                         proposed = copy.deepcopy(raw)
                         proposed["delivery"]["state_path"] = str(destination / "delivery.json")
+                        proposed["codex"] = {"read_timeout_ms": 60000, "turn_sandbox_policy": {
+                            "type": "workspaceWrite", "writableRoots": ["/workspace", "/workspace/repo", "/workspace/repo/.git"],
+                            "readOnlyAccess": {"type": "fullAccess"}, "networkAccess": False,
+                            "excludeTmpdirEnvVar": False, "excludeSlashTmp": False}}
                         proposed["tracker"]["provider"]["states"].update(review="Human review", dev_validation="Dev validation", production_ready="Ready for production")
                         atomic(new_workflow, b"---\n" + canonical(proposed) + b"\n---\nUpdated prompt.\n")
                         before = {**data, "runtime_config": config}
